@@ -86,10 +86,11 @@ def tokenize(code):
 
         
         if not match:
-            print("\n❌ Error: Invalid token detected!")
+            print("\n Error: Invalid token detected!")
             print(f"   Remaining code: {code[:20]}")  
             print(f"   Last extracted tokens: {tokens[-5:]}")  
             sys.stderr.write(f"Error: Invalid token near '{code[:20]}'\n")
+            print("21 Error")
             sys.exit(21)
 
     return tokens
@@ -101,16 +102,24 @@ def main():
     
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--help", action="store_true", help="Show help message and exit")
+    parser.add_argument("-h", action="store_true", help="Show help message and exit")
     parser.add_argument("--source", type=str, help="Path to input file (default: stdin)")
 
     args, unknown_args = parser.parse_known_args()
     
     
-    # if unknown_args:
-    #     sys.stderr.write(f"Error: Unknown parameter(s): {' '.join(unknown_args)}\n")
-    #     sys.exit(10) 
+    if unknown_args:
+        sys.stderr.write(f"Error: Unknown parameter(s): {' '.join(unknown_args)}\n")
+        sys.exit(10) 
+        
     
-    if args.help:
+    help_count = sys.argv.count("--help") + sys.argv.count("-h")
+
+    if help_count > 1:
+        sys.stderr.write("Error: --help cannot be combined with itself or -h\n")
+        sys.exit(10)
+
+    if args.help or args.h:
         if args.source:
             sys.stderr.write("Error: --help cannot be combined with other parameters\n")
             sys.exit(10)
@@ -135,8 +144,8 @@ def main():
     # POTIM dorobyty
     else:
         input_data = sys.stdin.read()
-        print(f'Here{input_data}')
-        sys.exit(0)
+        
+        
 
     tokens = tokenize(input_data)
     for token in tokens:
