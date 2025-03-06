@@ -2,7 +2,7 @@ import sys
 import re
 import argparse
 import xml.etree.ElementTree as ET
-#from lark import Lark, Transformer, Tree
+from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken
 
 
 TOKEN_TYPES = [
@@ -53,38 +53,46 @@ def tokenize(code):
 
         
         if code.startswith('"'):
-            end_index = code.find('"', 1)  
+            end_index = code.find('"', 1)
             if end_index == -1:
                 sys.stderr.write("Error: Unclosed comment in source code.\n")
                 sys.exit(21)
-
-            
             code = code[end_index + 1:]
             continue  
 
-        
         for pattern, token_type in TOKEN_TYPES:
             regex = re.compile(pattern)
             match = regex.match(code)
 
             if match:
-               
-                if token_type == "STRING":
-                    string_value = match.group(0)
+                lexeme = match.group(0)
+                
+                
+                # if token_type == "STRING":
+                #     string_content = lexeme[1:-1] 
+                #     try:
+                #         unescaped_string = bytes(string_content, "utf-8").decode("unicode_escape")  
+                #     except UnicodeDecodeError:
+                #         sys.stderr.write(f"Error: Invalid escape sequence in string: {string_content}\n")
+                #         sys.exit(21)
 
-                    
-                    if "\n" in string_value:
-                        sys.stderr.write(f"Error: String contains a new line, which is not allowed.\n")
-                        sys.exit(21)
+                #     print("string")
+                #     escape_sequences = re.findall(r'\.', string_content)
+                #     print(escape_sequences)
+                #     allowed_escapes = ["\'", "\n", "\\"]
+                #     for esc in escape_sequences:
+                #         print("esc" + esc)
+                #         if esc not in allowed_escapes:
+                #             sys.stderr.write(f"Error: Invalid escape sequence {esc} in string.\n")
+                #             sys.exit(21)
+                            
 
                 if token_type:  
-                    tokens.append((token_type, match.group(0)))
+                   tokens.append((token_type, lexeme))
 
-               
                 code = code[match.end():]
                 break  
 
-        
         if not match:
             print("\n Error: Invalid token detected!")
             print(f"   Remaining code: {code[:20]}")  
@@ -95,8 +103,68 @@ def tokenize(code):
 
     return tokens
 
+GRAMMAR = r'''
+    start: class_def+ COMMENT?
+    
+    class_def: "class" CLASS_ID ":" CLASS_ID "{" method_def* "}"
+    
+    method_def: METHOD_ID "[" "|" statement* "|" "]"
+
+    statement: assignment 
+             | instantiation_stmt
+             | method_call_stmt
+
+    assignment: ID ":=" expr "."
+
+    instantiation_stmt: CLASS_ID "(" expr_list? ")" "."
+
+    method_call_stmt: ID "." ID "(" expr_list? ")" "."
+
+    expr: ID
+        | INTEGER
+        | STRING
+        | instantiation_expr
+        | method_call_expr
+        | "(" expr ")"  -> group
+
+    instantiation_expr: CLASS_ID "(" expr_list? ")" 
+    method_call_expr: ID "." ID "(" expr_list? ")" 
+
+    expr_list: expr ("," expr)*
+
+    COMMENT: "\"" /[^"]*/ "\""
+
+    ID: /[a-z_][a-zA-Z0-9_]*/
+    CLASS_ID: /[A-Z][a-zA-Z0-9_]*/
+    METHOD_ID: "run" | ID   // Allows `run` but also other method names
+
+    INTEGER: /[0-9]+/
+    STRING: /'[^']*'/
+
+    %ignore /\s+/
+    %ignore COMMENT
+'''
 
 
+parser = Lark(GRAMMAR,start = 'start',parser="lalr")
+
+def parse_code(code):
+    try:
+        print("### DEBUG: Parsing starts ###")
+        tree = parser.parse(code)
+        print("### PARSING SUCCESS ###")
+        print(tree.pretty())
+        return tree
+    except UnexpectedToken:
+        sys.stderr.write("Error: Syntax error.\n")
+        sys.exit(22)
+    except UnexpectedCharacters:
+        sys.stderr.write("Error: Syntax error.\n")
+        sys.exit(22)
+    except UnexpectedInput:
+        sys.stderr.write("Error: Syntax error.\n")
+        sys.exit(22)
+    
 
 def main():
     
@@ -146,10 +214,20 @@ def main():
         input_data = sys.stdin.read()
         
         
-
+    print(input_data)
+    print("Input data above ---------------------------------------")
     tokens = tokenize(input_data)
+    print()
+    print(tokens)
+    print("Tokens above ---------------------------------------")
+    print()
     for token in tokens:
         print(token)
     
+    parse_code(input_data)
+      
 if __name__ == "__main__":
     main()
+    
+
+
