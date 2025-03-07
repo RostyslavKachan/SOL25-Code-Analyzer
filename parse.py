@@ -2,7 +2,7 @@ import sys
 import re
 import argparse
 import xml.etree.ElementTree as ET
-from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken
+from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken, LexError
 
 
 TOKEN_TYPES = [
@@ -20,10 +20,13 @@ TOKEN_TYPES = [
     (r"\bString\b", "STRING_CLASS"),
     (r"\bBlock\b", "BLOCK_CLASS"),
     (r"\b[a-z][a-zA-Z0-9]*:\s*", "SELECTOR"),
+    (r":[a-z][_a-zA-Z0-9]*", "PARAMETR"),
     (r"\b[A-Z][a-zA-Z0-9]*\b", "CLASS_ID"),
     (r"[_a-z][_a-zA-Z0-9]*", "ID"), 
     (r"[+-]?\d+", "INTEGER"), 
-    (r"'(?:\\['n\\]|[^'\\\n])*'", "STRING"),  
+    (r"'(?:\\['n\\]|[^'\\\n])*'", "STRING"),
+    (r"\(", "L_ROUND"), 
+    (r"\)", "R_ROUND"),   
     (r"\{", "L_CURLY"),   
     (r"\}", "R_CURLY"),   
     (r"\[", "L_BRACKET"), 
@@ -66,25 +69,7 @@ def tokenize(code):
 
             if match:
                 lexeme = match.group(0)
-                
-                
-                # if token_type == "STRING":
-                #     string_content = lexeme[1:-1] 
-                #     try:
-                #         unescaped_string = bytes(string_content, "utf-8").decode("unicode_escape")  
-                #     except UnicodeDecodeError:
-                #         sys.stderr.write(f"Error: Invalid escape sequence in string: {string_content}\n")
-                #         sys.exit(21)
-
-                #     print("string")
-                #     escape_sequences = re.findall(r'\.', string_content)
-                #     print(escape_sequences)
-                #     allowed_escapes = ["\'", "\n", "\\"]
-                #     for esc in escape_sequences:
-                #         print("esc" + esc)
-                #         if esc not in allowed_escapes:
-                #             sys.stderr.write(f"Error: Invalid escape sequence {esc} in string.\n")
-                #             sys.exit(21)
+           
                             
 
                 if token_type:  
@@ -104,49 +89,52 @@ def tokenize(code):
     return tokens
 
 GRAMMAR = r'''
-    start: class_def+ COMMENT?
     
-    class_def: "class" CLASS_ID ":" CLASS_ID "{" method_def* "}"
+    program: class_def+
+
     
-    method_def: METHOD_ID "[" "|" statement* "|" "]"
+    class_def: "class" CID ":" CID "{"method_def*"}"
+    
+    method_def: method_name "[" param_list "|" blockstat "]"
 
-    statement: assignment 
-             | instantiation_stmt
-             | method_call_stmt
+    
+    method_name: ID (":" ID)* ":"?
 
-    assignment: ID ":=" expr "."
+    param_list: (":" ID)*
 
-    instantiation_stmt: CLASS_ID "(" expr_list? ")" "."
+    
+    blockstat: (ID ":=" expr ".")*
+    
 
-    method_call_stmt: ID "." ID "(" expr_list? ")" "."
+    // Вирази
+    expr: expr_base expr_tail  
 
-    expr: ID
-        | INTEGER
-        | STRING
-        | instantiation_expr
-        | method_call_expr
-        | "(" expr ")"  -> group
-
-    instantiation_expr: CLASS_ID "(" expr_list? ")" 
-    method_call_expr: ID "." ID "(" expr_list? ")" 
-
-    expr_list: expr ("," expr)*
-
-    COMMENT: "\"" /[^"]*/ "\""
-
-    ID: /[a-z_][a-zA-Z0-9_]*/
-    CLASS_ID: /[A-Z][a-zA-Z0-9_]*/
-    METHOD_ID: "run" | ID   // Allows `run` but also other method names
-
-    INTEGER: /[0-9]+/
-    STRING: /'[^']*'/
-
-    %ignore /\s+/
-    %ignore COMMENT
+    expr_base: SIGNED_INT  
+             | STR         
+             | ID          
+             | CID         
+             | "(" expr ")"  
+             | block
+    
+    expr_tail: ID
+             | expr_sel   
+             
+    expr_sel: ID ":" expr_base expr_sel?
+          
+    block: "[" param_list "|" blockstat "]"
+    
+    STR: /'([^'\\]|\\.)*'/
+    CID: /[A-Z][a-zA-Z0-9_]*/ 
+    
+    
+    %import common.SIGNED_INT  
+    %import common.CNAME -> ID      
+    %ignore /[ \t\n\f\r]+/     
+    %ignore /"[^"]*"/
 '''
 
 
-parser = Lark(GRAMMAR,start = 'start',parser="lalr")
+parser = Lark(GRAMMAR,start = 'program',parser="lalr")
 
 def parse_code(code):
     try:
@@ -164,8 +152,9 @@ def parse_code(code):
     except UnexpectedInput:
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
-    
-
+    except LexError:
+        sys.stderr.write("Error: Syntax error.\n")
+        sys.exit(22)
 def main():
     
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
@@ -229,5 +218,3 @@ def main():
 if __name__ == "__main__":
     main()
     
-
-
