@@ -6,6 +6,7 @@ from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters,
 
 
 TOKEN_TYPES = [
+    (r"\b[a-z][a-zA-Z0-9]*:\s*", "SELECTOR"),
     (r"class", "KEY_CLASS"),
     (r"self", "KEY_SELF"),
     (r"super", "KEY_SUPER"),
@@ -19,7 +20,7 @@ TOKEN_TYPES = [
     (r"\bInteger\b", "INTEGER_CLASS"),
     (r"\bString\b", "STRING_CLASS"),
     (r"\bBlock\b", "BLOCK_CLASS"),
-    (r"\b[a-z][a-zA-Z0-9]*:\s*", "SELECTOR"),
+    
     (r":[a-z][_a-zA-Z0-9]*", "PARAMETR"),
     (r"\b[A-Z][a-zA-Z0-9]*\b", "CLASS_ID"),
     (r"[_a-z][_a-zA-Z0-9]*", "ID"), 
@@ -89,49 +90,68 @@ def tokenize(code):
     return tokens
 
 GRAMMAR = r'''
-    
-    program: class_def+
+program: class_def+
 
-    
-    class_def: "class" CID ":" CID "{"method_def*"}"
-    
-    method_def: method_name "[" param_list "|" blockstat "]"
+class_def: "class" CID ":" CID "{" method_def* "}"
 
-    
-    method_name: ID (":" ID)* ":"?
+method_def: method_name "[" param_list "|" blockstat "]"
 
-    param_list: (":" ID)*
+method_name: VALID_ID | method_selector
+method_selector: ID_COLON+
 
-    
-    blockstat: (ID ":=" expr ".")*
-    
+param_list: (COLON_ID)*
 
-    // Вирази
-    expr: expr_base expr_tail  
+blockstat: (VALID_ID ":=" expr ".")*
 
-    expr_base: SIGNED_INT  
-             | STR         
-             | ID          
-             | CID         
-             | "(" expr ")"  
-             | block
-    
-    expr_tail: ID
-             | expr_sel   
-             
-    expr_sel: ID ":" expr_base expr_sel?
-          
-    block: "[" param_list "|" blockstat "]"
-    
-    STR: /'([^'\\]|\\.)*'/
-    CID: /[A-Z][a-zA-Z0-9_]*/ 
-    
-    
-    %import common.SIGNED_INT  
-    %import common.CNAME -> ID      
-    %ignore /[ \t\n\f\r]+/     
-    %ignore /"[^"]*"/
+// ========= ГОЛОВНЕ: вираз з опціональним хвостом:
+expr: expr_base expr_tail
+
+expr_tail: VALID_ID      // унарний селектор (наприклад, foo)
+         | expr_sel      // keyword-форма (foo: expr bar: expr ...)
+
+expr_sel: (ID_COLON expr_base expr_sel)?
+
+// базовий вираз
+expr_base: SIGNED_INT
+         | STR
+         | EXP_KEYWORD    // self, super, nil, true, false
+         | ID             // звичайний ідентифікатор
+         | CID            // ім'я класу
+         | "(" expr ")"   // дужки
+         | block          // блок
+
+block: "[" param_list "|" blockstat "]"
+
+// Ключові слова, які хочемо дозволити окремо від IDENT
+EXP_KEYWORD : "self" | "super" | "nil" | "true" | "false"
+
+// "class" та інші – заборонені як VALID_ID, але сама лексема існує
+KEYWORD: "class" | "self" | "super" | "nil" | "true" | "false"
+
+// Звичайний ідентифікатор (не збігається з ключовими словами)
+VALID_ID: /(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*/
+
+// Class ID
+CID: /[A-Z][a-zA-Z0-9_]*/
+
+// Звичайний ідентифікатор
+ID: /[a-z_][a-zA-Z0-9_]*/
+
+// `foo:` (keyword-селектор)
+ID_COLON: /(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*:/
+
+// `:foo` (параметр)
+COLON_ID: /:(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*/
+
+STR: /'([^'\\]|\\.)*'/
+%import common.SIGNED_INT
+
+%ignore /[ \t\n\f\r]+/
+%ignore /"[^"]*"/
 '''
+
+
+
 
 
 parser = Lark(GRAMMAR,start = 'program',parser="lalr")
@@ -143,18 +163,26 @@ def parse_code(code):
         print("### PARSING SUCCESS ###")
         print(tree.pretty())
         return tree
-    except UnexpectedToken:
+    except UnexpectedToken as e:
+        print(f"Syntax error at line {e.line}, column {e.column}.")
+        print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
+        # If you want to see some code context around the error, use:
+        context_str = e.get_context(code, span=40)
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
-    except UnexpectedCharacters:
+    # except UnexpectedCharacters:
+    #     sys.stderr.write("Error: Syntax error.\n")
+    #     sys.exit(22)
+    except UnexpectedInput as e:
+        print(f"Syntax error at line {e.line}, column {e.column}.")
+        print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
+        # If you want to see some code context around the error, use:
+        context_str = e.get_context(code, span=40)
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
-    except UnexpectedInput:
-        sys.stderr.write("Error: Syntax error.\n")
-        sys.exit(22)
-    except LexError:
-        sys.stderr.write("Error: Syntax error.\n")
-        sys.exit(22)
+    # except LexError:
+    #     sys.stderr.write("Error: Syntax error.\n")
+    #     sys.exit(22)
 def main():
     
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
@@ -214,6 +242,7 @@ def main():
         print(token)
     
     parse_code(input_data)
+    sys.exit(0)
       
 if __name__ == "__main__":
     main()
