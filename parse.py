@@ -103,44 +103,46 @@ param_list: (COLON_ID)*
 
 blockstat: (VALID_ID ":=" expr ".")*
 
-// ========= ГОЛОВНЕ: вираз з опціональним хвостом:
+
 expr: expr_base expr_tail
 
-expr_tail: VALID_ID      // унарний селектор (наприклад, foo)
-         | expr_sel      // keyword-форма (foo: expr bar: expr ...)
+expr_tail: VALID_ID      
+         | expr_sel      
 
 expr_sel: (ID_COLON expr_base expr_sel)?
 
-// базовий вираз
+
 expr_base: SIGNED_INT
          | STR
-         | EXP_KEYWORD    // self, super, nil, true, false
-         | ID             // звичайний ідентифікатор
-         | CID            // ім'я класу
-         | "(" expr ")"   // дужки
-         | block          // блок
+         | EXP_KEYWORD    
+         | ID             
+         | CID            
+         | "(" expr ")"   
+         | block          
 
 block: "[" param_list "|" blockstat "]"
 
-// Ключові слова, які хочемо дозволити окремо від IDENT
+
 EXP_KEYWORD : "self" | "super" | "nil" | "true" | "false"
 
-// "class" та інші – заборонені як VALID_ID, але сама лексема існує
+
 KEYWORD: "class" | "self" | "super" | "nil" | "true" | "false"
 
-// Звичайний ідентифікатор (не збігається з ключовими словами)
+
 VALID_ID: /(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*/
 
-// Class ID
+
 CID: /[A-Z][a-zA-Z0-9_]*/
 
-// Звичайний ідентифікатор
+
 ID: /[a-z_][a-zA-Z0-9_]*/
 
-// `foo:` (keyword-селектор)
+
 ID_COLON: /(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*:/
 
-// `:foo` (параметр)
+//METHOD_COLON: /[a-z_][a-zA-Z0-9_]*:/
+
+
 COLON_ID: /:(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*/
 
 STR: /'([^'\\]|\\.)*'/
