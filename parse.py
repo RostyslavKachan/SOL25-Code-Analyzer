@@ -46,8 +46,12 @@ class SOL25Transformer(Transformer):
     """Трансформує `parse_tree` у AST (XML)"""
 
     def __init__(self):
+        global input_data
         super().__init__()
         self.root = ET.Element("program", language="SOL25")
+        comment_text = extract_first_comment(input_data)
+        if comment_text:
+            self.root.set("description", comment_text)
 
     def program(self, classes):
         """Обробляє програму (список класів)"""
@@ -64,62 +68,72 @@ class SOL25Transformer(Transformer):
         return class_elem
 
     def method_def(self, args):
-        """Обробка методу"""
-        method_name, params, body = args
+        """Обробка методу SOL25"""
+        if not args:
+            raise ValueError("method_def отримав порожні аргументи!")
 
-        # Перетворення method_name у строку
-        if isinstance(method_name, Tree):
-            method_name = method_name.children[0]  
-        if isinstance(method_name, Token):
-            method_name = method_name.value  
+        method_tree = args.pop(0)  # Перший елемент - це ім'я методу
 
-        # Перетворення params у список
-        if isinstance(params, Tree):
-            params = params.children  
+        # Отримуємо ім'я методу або селектор
+        if isinstance(method_tree, Tree) and method_tree.data == "method_name":
+            selector_tree = method_tree.children[0]
+            if isinstance(selector_tree, Tree) and selector_tree.data == "method_selector":
+                method_name = "".join(part + ":" for part in selector_tree.children)
+            else:
+                method_name = selector_tree.value  # Простий селектор (наприклад, `run`)
+        else:
+            raise ValueError(f"Невідома структура method_name: {method_tree}")
 
+        # Обробка параметрів (якщо вони є)
+        if args and isinstance(args[0], Tree) and args[0].data == "param_list":
+            params = args.pop(0).children  # Отримуємо список параметрів
+        else:
+            params = []
+
+        # Обробка тіла методу (якщо воно є)
+        body = args if args else []
+
+        # XML структура
         method_elem = ET.Element("method", selector=method_name)
-        block_elem = ET.SubElement(method_elem, "block", arity=str(len(params)))
+        block_elem = ET.Element("block", arity=str(len(params)))
 
+        # Додаємо параметри
         for i, param in enumerate(params, start=1):
             ET.SubElement(block_elem, "parameter", name=param, order=str(i))
 
-        # Додаємо оператори у block, перевіряючи їхній тип
-        for order, stmt in enumerate(body, start=1):
-            if isinstance(stmt, tuple) and len(stmt) == 2:
-                var_name, expr = stmt
-                assign_elem = ET.Element("assign", order=str(order))
-                ET.SubElement(assign_elem, "var", name=var_name)
-                expr_elem = ET.SubElement(assign_elem, "expr")
-                expr_elem.append(expr)
-                block_elem.append(assign_elem)
-            elif isinstance(stmt, ET.Element):
-                block_elem.append(stmt)  # Якщо stmt – XML, додаємо
+        # ✅ **Головна зміна тут:**
+        for stmt in body:
+            if isinstance(stmt, ET.Element) and stmt.tag == "block":
+                # Якщо stmt — це вже блок, додаємо його вміст напряму, не створюючи нового `<block>`
+                for sub_stmt in list(stmt):
+                    block_elem.append(sub_stmt)
             else:
-                print(f"⚠️ Попередження: Пропущено невідомий тип {stmt} у методі {method_name}")
+                block_elem.append(stmt)
+
+        # Додаємо `<block>` до методу
+        method_elem.append(block_elem)
 
         return method_elem
 
 
 
 
+
+
     def blockstat(self, statements):
         """Обробка списку команд у блоці"""
-        result = []  # Список команд у блоці
+        block_elem = ET.Element("block")  
 
-        for stmt in statements:
-            if isinstance(stmt, tuple) and len(stmt) == 2:  # Це `assign`
-                var_name, expr = stmt
-                assign_elem = ET.Element("assign")
-                ET.SubElement(assign_elem, "var", name=var_name)
-                expr_elem = ET.SubElement(assign_elem, "expr")
-                expr_elem.append(expr)
-                result.append(assign_elem)
-            elif isinstance(stmt, Token):
-                result.append(ET.Element("var", name=stmt.value))  # Конвертуємо Token у XML
-            else:
-                result.append(stmt)  # Додаємо інші команди
+        for order, stmt in enumerate(statements, start=1):
+            if isinstance(stmt, ET.Element) and stmt.tag == "assign":
+                stmt.set("order", str(order))  # ✅ Додаємо порядок виконання
+            elif isinstance(stmt, Tree):  
+                stmt = self.transform(stmt)  # Рекурсивне перетворення
+                
+            block_elem.append(stmt)
 
-        return result
+        return block_elem  # ✅ Тепер повертає XML
+
 
 
 
@@ -165,7 +179,21 @@ class SOL25Transformer(Transformer):
     def assign(self, args):
         """Обробка присвоєння (:=)"""
         var_name, value = args
-        return (var_name, value)  # Тепер повертаємо `tuple`, а не XML
+        assign_elem = ET.Element("assign")
+
+        ET.SubElement(assign_elem, "var", name=var_name)
+        expr_elem = ET.SubElement(assign_elem, "expr")
+
+        # Якщо value є деревом, перевіряємо його вміст
+        if isinstance(value, Tree):
+            expr_elem.append(self.transform(value))  # Рекурсивна трансформація
+        elif isinstance(value, ET.Element):
+            expr_elem.append(value)  # Якщо це XML, додаємо його
+        else:
+            expr_elem.text = str(value)  # Якщо це число або рядок, додаємо як текст
+
+        return assign_elem  # ✅ Тепер повертає XML
+
 
 
     def expr_base(self, args):
@@ -227,6 +255,18 @@ The filter-type script (parse.py in Python 3.11) reads source code in SOL25 from
 checks the lexical, syntactic, and static semantic correctness of the code, and outputs the XML representation 
 of the abstract syntax tree of the program.""")
 
+def extract_first_comment(code):
+    """Вилучає перший блочний коментар у SOL25."""
+    comment_pattern = re.compile(r'"([^"]*)"', re.DOTALL)
+    match = comment_pattern.search(code)
+    
+    return match.group(1) if match else None
+
+# def format_comment(comment):
+#     """Форматує коментар для XML, замінюючи `\n` на `&#10;` та запобігаючи екрануванню `&`."""
+#     if comment:
+#         return comment.replace("\n", "&#10;")  # Замінюємо новий рядок
+#     return None
 
 
 def tokenize(code):
@@ -273,14 +313,17 @@ program: class_def+
 
 class_def: "class" CID ":" CID "{" method_def* "}"
 
-method_def: method_name "[" param_list "|" blockstat "]"
+method_def: method_name "[" param_list* "|" blockstat* "]"
 
 method_name: VALID_ID | method_selector
 method_selector: ID_COLON+
 
 param_list: (COLON_ID)*
 
-blockstat: (VALID_ID ":=" expr ".")*
+blockstat: (assign ".")*
+assign: VALID_ID ":=" expr
+
+
 
 
 expr: expr_base expr_tail
@@ -316,8 +359,8 @@ CID: /[A-Z][a-zA-Z0-9_]*/
 
 ID: /[a-z_][a-zA-Z0-9_]*/
 
-
-ID_COLON: /(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*:/
+ID_COLON: /[a-z_][a-zA-Z0-9_]*:/
+//ID_COLON: /(?!(class|self|super|nil|true|false)\b)[a-z_][a-zA-Z0-9_]*:/
 
 //METHOD_COLON: /[a-z_][a-zA-Z0-9_]*:/
 
@@ -339,10 +382,10 @@ parser = Lark(GRAMMAR,start = 'program',parser="lalr")
 
 def parse_code(code):
     try:
-        print("### DEBUG: Parsing starts ###")
+        # print("### DEBUG: Parsing starts ###")
         tree = parser.parse(code)
-        print("### PARSING SUCCESS ###")
-        print(tree.pretty())
+        # print("### PARSING SUCCESS ###")
+        #print(tree.pretty())
         return tree
     except UnexpectedToken as e:
         print(f"Syntax error at line {e.line}, column {e.column}.")
@@ -366,7 +409,7 @@ def parse_code(code):
     #     sys.exit(22)
  
 
-
+input_data = ""
 def main():
     
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
@@ -399,7 +442,7 @@ def main():
     #     sys.stderr.write("Error: Missing required parameter\n")
     #     sys.exit(10)
         
-    input_data = ""
+    global input_data
     if args.source:
         try:
             with open(args.source, 'r', encoding='utf-8') as file:
@@ -415,15 +458,15 @@ def main():
         input_data = sys.stdin.read()
         
         
-    print(input_data)
-    print("Input data above ---------------------------------------")
+    # print(input_data)
+    # print("Input data above ---------------------------------------")
     tokens = tokenize(input_data)
-    print()
-    print(tokens)
-    print("Tokens above ---------------------------------------")
-    print()
-    for token in tokens:
-        print(token)
+    # print()
+    # print(tokens)
+    # print("Tokens above ---------------------------------------")
+    # print()
+    # for token in tokens:
+    #     # print(token)
     
     parse_tree = parse_code(input_data)
     transformer = SOL25Transformer()
