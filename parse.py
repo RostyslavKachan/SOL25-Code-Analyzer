@@ -2,7 +2,9 @@ import sys
 import re
 import argparse
 import xml.etree.ElementTree as ET
-from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken, LexError
+from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken, LexError, Token
+import xml.dom.minidom
+
 
 
 TOKEN_TYPES = [
@@ -40,7 +42,184 @@ TOKEN_TYPES = [
     (r"\".*?\"", None)  
 ]
 
+class SOL25Transformer(Transformer):
+    """Трансформує `parse_tree` у AST (XML)"""
 
+    def __init__(self):
+        super().__init__()
+        self.root = ET.Element("program", language="SOL25")
+
+    def program(self, classes):
+        """Обробляє програму (список класів)"""
+        for cls in classes:
+            self.root.append(cls)
+        return self.root
+
+    def class_def(self, args):
+        """Обробка класу"""
+        class_name, parent_name, *methods = args
+        class_elem = ET.Element("class", name=class_name, parent=parent_name)
+        for method in methods:
+            class_elem.append(method)
+        return class_elem
+
+    def method_def(self, args):
+        """Обробка методу"""
+        method_name, params, body = args
+
+        # Перетворення method_name у строку
+        if isinstance(method_name, Tree):
+            method_name = method_name.children[0]  
+        if isinstance(method_name, Token):
+            method_name = method_name.value  
+
+        # Перетворення params у список
+        if isinstance(params, Tree):
+            params = params.children  
+
+        method_elem = ET.Element("method", selector=method_name)
+        block_elem = ET.SubElement(method_elem, "block", arity=str(len(params)))
+
+        for i, param in enumerate(params, start=1):
+            ET.SubElement(block_elem, "parameter", name=param, order=str(i))
+
+        # Додаємо оператори у block, перевіряючи їхній тип
+        for order, stmt in enumerate(body, start=1):
+            if isinstance(stmt, tuple) and len(stmt) == 2:
+                var_name, expr = stmt
+                assign_elem = ET.Element("assign", order=str(order))
+                ET.SubElement(assign_elem, "var", name=var_name)
+                expr_elem = ET.SubElement(assign_elem, "expr")
+                expr_elem.append(expr)
+                block_elem.append(assign_elem)
+            elif isinstance(stmt, ET.Element):
+                block_elem.append(stmt)  # Якщо stmt – XML, додаємо
+            else:
+                print(f"⚠️ Попередження: Пропущено невідомий тип {stmt} у методі {method_name}")
+
+        return method_elem
+
+
+
+
+    def blockstat(self, statements):
+        """Обробка списку команд у блоці"""
+        result = []  # Список команд у блоці
+
+        for stmt in statements:
+            if isinstance(stmt, tuple) and len(stmt) == 2:  # Це `assign`
+                var_name, expr = stmt
+                assign_elem = ET.Element("assign")
+                ET.SubElement(assign_elem, "var", name=var_name)
+                expr_elem = ET.SubElement(assign_elem, "expr")
+                expr_elem.append(expr)
+                result.append(assign_elem)
+            elif isinstance(stmt, Token):
+                result.append(ET.Element("var", name=stmt.value))  # Конвертуємо Token у XML
+            else:
+                result.append(stmt)  # Додаємо інші команди
+
+        return result
+
+
+
+
+
+    def expr_tail(self, args):
+        """Обробка виразів, які мають селектори (наприклад, obj from: 10)"""
+        selectors = []
+        for arg in args:
+            if isinstance(arg, Tree):
+                arg = arg.children[0]  # Отримуємо перший елемент
+            if isinstance(arg, Token):
+                arg = arg.value  # Перетворюємо Token у рядок
+            selectors.append(str(arg))  # Переконуємось, що це рядок
+        
+        return ":".join(selectors)  # Формуємо селекторний рядок
+
+    def expr(self, args):
+        """Обробка виразів"""
+        base, tail = args
+
+        # Якщо `base` - це `Token`, створюємо XML-елемент
+        if isinstance(base, str):  
+            base = ET.Element("var", name=base)
+
+        if tail:
+            # Переконуємось, що `tail` - це рядок, а не Tree
+            if isinstance(tail, Tree):
+                tail = tail.children[0]  # Беремо перший елемент
+
+            if isinstance(tail, Token):
+                tail = tail.value  # Перетворюємо Token у рядок
+
+            send_elem = ET.Element("send", selector=str(tail))
+            expr_elem = ET.SubElement(send_elem, "expr")
+            expr_elem.append(base)  # Тепер `base` точно є `Element`
+            return send_elem
+        
+        return base
+
+
+
+    def assign(self, args):
+        """Обробка присвоєння (:=)"""
+        var_name, value = args
+        return (var_name, value)  # Тепер повертаємо `tuple`, а не XML
+
+
+    def expr_base(self, args):
+        """Обробка базових виразів"""
+        return args[0]
+
+    def expr_sel(self, args):
+        """Обробка селекторних виразів (наприклад, `object method: value`)"""
+        selectors = []
+        for arg in args:
+            if isinstance(arg, ET.Element):  
+            # Якщо це XML-елемент, беремо його ім'я (наприклад, селектор)
+                selectors.append(arg.attrib.get("name", arg.tag))  
+            else:
+                selectors.append(str(arg))  # Якщо це рядок, просто додаємо
+        return ":".join(selectors)
+
+
+    def SIGNED_INT(self, token):
+        """Обробка чисел"""
+        return ET.Element("literal", attrib={"class": "Integer"}, value=str(token))
+
+    def STR(self, token):
+        """Обробка рядків"""
+        return ET.Element("literal", attrib={"class": "String"}, value=token.strip("'"))
+
+    def ID(self, token):
+        """Обробка ідентифікаторів"""
+        return ET.Element("var", name=token)
+
+    def CID(self, token):
+        """Обробка імен класів"""
+        return token
+
+    def ID_COLON(self, token):
+        """Обробка селекторів методів"""
+        return token[:-1]  # Видаляємо двокрапку
+
+    def COLON_ID(self, token):
+        """Обробка імен параметрів"""
+        return token[1:]  # Видаляємо двокрапку
+
+    def transform_to_xml(self):
+        """Генерує XML з відступами"""
+        raw_xml = ET.tostring(self.root, encoding="utf-8")  # Генеруємо XML як байти
+        parsed_xml = xml.dom.minidom.parseString(raw_xml)  # Парсимо для форматування
+        formatted_xml = parsed_xml.toprettyxml(indent="  ")  # Форматуємо XML
+        # print("----------------------------------------------------------------")
+        # print(formatted_xml)
+        # print("----------------------------------------------------------------")
+        # Not the best way 
+        formatted_xml = formatted_xml.replace('<?xml version="1.0" ?>', '<?xml version="1.0" encoding="UTF-8"?>')
+
+        return formatted_xml
 
 def print_help():
     print("""Code Analyzer in SOL25 (parse.py)
@@ -185,6 +364,9 @@ def parse_code(code):
     # except LexError:
     #     sys.stderr.write("Error: Syntax error.\n")
     #     sys.exit(22)
+ 
+
+
 def main():
     
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
@@ -243,7 +425,11 @@ def main():
     for token in tokens:
         print(token)
     
-    parse_code(input_data)
+    parse_tree = parse_code(input_data)
+    transformer = SOL25Transformer()
+    xml_tree = transformer.transform(parse_tree)
+    xml_output = transformer.transform_to_xml()
+    print(xml_output)
     sys.exit(0)
       
 if __name__ == "__main__":
