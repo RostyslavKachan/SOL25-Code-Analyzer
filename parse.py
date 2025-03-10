@@ -78,7 +78,7 @@ class SOL25Transformer(Transformer):
         if isinstance(method_tree, Tree) and method_tree.data == "method_name":
             selector_tree = method_tree.children[0]
             if isinstance(selector_tree, Tree) and selector_tree.data == "method_selector":
-                method_name = "".join(part + ":" for part in selector_tree.children)
+                method_name = "".join(part for part in selector_tree.children)
             else:
                 method_name = selector_tree.value  # Простий селектор (наприклад, `run`)
         else:
@@ -153,11 +153,22 @@ class SOL25Transformer(Transformer):
 
     def expr(self, args):
         """Обробка виразів"""
-        base, tail = args
+        # print(f"DEBUG: args -> {args}")
 
-        # Якщо `base` - це `Token`, створюємо XML-елемент
+        if len(args) == 1:
+            base = args[0]
+            tail = None
+        else:
+            base, tail = args
+
+        # Якщо `base` — це рядок (ім'я змінної, класу або ключове слово)
         if isinstance(base, str):  
-            base = ET.Element("var", name=base)
+            # if base in ["nil", "true", "false"]:
+            #     base = ET.Element("literal", {"class": base.capitalize(), "value": base})
+            if base[0].isupper():  # Це ім'я класу
+                base = ET.Element("literal", {"class": "class", "value": base})
+            else:  # Це змінна
+                base = ET.Element("var", name=base)
 
         if tail:
             # Переконуємось, що `tail` - це рядок, а не Tree
@@ -169,15 +180,17 @@ class SOL25Transformer(Transformer):
 
             send_elem = ET.Element("send", selector=str(tail))
             expr_elem = ET.SubElement(send_elem, "expr")
-            expr_elem.append(base)  # Тепер `base` точно є `Element`
+            expr_elem.append(base)  # Додаємо оброблений `base`
             return send_elem
-        
+
         return base
+
 
 
 
     def assign(self, args):
         """Обробка присвоєння (:=)"""
+        # print(f"DEBUG: assign_def args -> {args}")
         var_name, value = args
         assign_elem = ET.Element("assign")
 
@@ -222,7 +235,10 @@ class SOL25Transformer(Transformer):
 
     def ID(self, token):
         """Обробка ідентифікаторів"""
+        if token in {"nil", "true", "false"}:
+            return ET.Element("literal", {"class": token.capitalize(), "value": token})
         return ET.Element("var", name=token)
+
 
     def CID(self, token):
         """Обробка імен класів"""
@@ -230,7 +246,7 @@ class SOL25Transformer(Transformer):
 
     def ID_COLON(self, token):
         """Обробка селекторів методів"""
-        return token[:-1]  # Видаляємо двокрапку
+        return token  
 
     def COLON_ID(self, token):
         """Обробка імен параметрів"""
@@ -328,8 +344,8 @@ assign: VALID_ID ":=" expr
 
 expr: expr_base expr_tail
 
-expr_tail: VALID_ID      
-         | expr_sel      
+expr_tail: expr_sel      
+         | VALID_ID      
 
 expr_sel: (ID_COLON expr_base expr_sel)?
 
