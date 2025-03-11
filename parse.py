@@ -411,10 +411,10 @@ assign: VALID_ID ":=" expr
 
 expr: expr_base expr_tail
 
-expr_tail: expr_sel      
+expr_tail: expr_sel?      
          | VALID_ID      
 
-expr_sel: ID_COLON expr_base expr_sel?
+expr_sel: ID_COLON expr_base expr_sel*
 
 
 expr_base: SIGNED_INT
