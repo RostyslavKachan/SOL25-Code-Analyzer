@@ -43,7 +43,7 @@ TOKEN_TYPES = [
 ]
 
 class SOL25Transformer(Transformer):
-    """Трансформує `parse_tree` у AST (XML)"""
+    """Трансформує parse_tree у AST (XML)"""
 
     def __init__(self):
         global input_data
@@ -69,7 +69,9 @@ class SOL25Transformer(Transformer):
 
     def method_def(self, args):
         """Обробка методу SOL25"""
-        # print("method_def DEBUG     ", args)
+        # print("method_def DEBUG ->   ", args)
+        # print()
+        # print()
         if not args:
             raise ValueError("method_def отримав порожні аргументи!")
 
@@ -81,7 +83,7 @@ class SOL25Transformer(Transformer):
             if isinstance(selector_tree, Tree) and selector_tree.data == "method_selector":
                 method_name = "".join(part for part in selector_tree.children)
             else:
-                method_name = selector_tree.value  # Простий селектор (наприклад, `run`)
+                method_name = selector_tree.value  # Простий селектор (наприклад, run)
         else:
             raise ValueError(f"Невідома структура method_name: {method_tree}")
 
@@ -105,13 +107,13 @@ class SOL25Transformer(Transformer):
         # ✅ **Головна зміна тут:**
         for stmt in body:
             if isinstance(stmt, ET.Element) and stmt.tag == "block":
-                # Якщо stmt — це вже блок, додаємо його вміст напряму, не створюючи нового `<block>`
+                # Якщо stmt — це вже блок, додаємо його вміст напряму, не створюючи нового <block>
                 for sub_stmt in list(stmt):
                     block_elem.append(sub_stmt)
             else:
                 block_elem.append(stmt)
 
-        # Додаємо `<block>` до методу
+        # Додаємо <block> до методу
         method_elem.append(block_elem)
 
         return method_elem
@@ -124,6 +126,8 @@ class SOL25Transformer(Transformer):
     def blockstat(self, statements):
         """Обробка списку команд у блоці"""
         # print("blockstat DEBUG ->   ", statements)
+        # print()
+        # print()
         block_elem = ET.Element("block")  
 
         for order, stmt in enumerate(statements, start=1):
@@ -142,30 +146,65 @@ class SOL25Transformer(Transformer):
 
 
     def expr_tail(self, args):
-        """Обробка виразів, які мають селектори (наприклад, obj from: 10)."""
+        """Обробка виразів, які мають селектори (наприклад, obj from: 10 a: 5 b: 3)."""
         # print("expr_tail DEBUG ->   ", args)
+        
+        selectors = []  # Зберігає всі `from:`, `a:`, `b:` і т.д.
+        values = []     # Зберігає всі значення аргументів
+        newArgs = []
+        # print(f"----------------------------- {len(args)}")
+        if len(args) == 0: 
+            return None
+        if len(args) == 1 and isinstance(args[0], tuple):  
+            args = args[0]
+            for arg in args:
+                newArgs.append(arg[0])
+        elif len(args) == 1 and isinstance(args, list) :
+            newArgs = args
+        # else:
+            
+            # print("expr_tail DEBUG ->   ", args)
+            
+            
+            
+        # print(f"------------------------- {newArgs}")
+
+
 
         if not args:
-            return None, []  # ✅ Завжди повертаємо два значення (селектор, список аргументів)
-
-        first = args[0]
-
-        # Якщо це простий селектор (наприклад, `obj method`)
-        if isinstance(first, Token) and first.type == "VALID_ID":
-            return first.value, []
-
-        # Якщо це параметризований селектор (ExprSel)
-        if isinstance(first, ET.Element) and first.tag == "send":
-            return first.attrib["selector"], list(first)
-
-        # print(f"⚠️ ПОМИЛКА: expr_tail отримав невідомий аргумент {first}")
-        return None, []
+            return None, []  # Якщо немає аргументів, повертаємо порожній селектор
 
 
 
+        for arg in newArgs:
+            
+            if isinstance(arg, Token) and arg.type == "ID_COLON":
+                selectors.append(arg.value)  # Додаємо `from:`, `a:`, `b:`
+            elif isinstance(arg, Token) and arg.type == "ID":
+                selectors.append(arg.value)
+            elif isinstance(arg, Token) and arg.type == "VALID_ID":
+                selectors.append(arg.value)
+            elif isinstance(arg, ET.Element):
+                values.append(arg)  # Додаємо аргументи (наприклад, `1`, `2`, `4`)
+
+        # 🛠 **Виправлення помилки `IndexError`**
+        if len(selectors) == 0:
+            selector = None  # Якщо немає селекторів, повертаємо None
+        elif len(selectors) == 1:
+            selector = selectors[0]  # Якщо один селектор, повертаємо його як є
+        else:
+            selector = "".join(selectors)  # Якщо кілька селекторів, об'єднуємо їх
+
+        # print("✅ FIXED expr_tail -> ", selector, values)
+        return selector, values  # ✅ Повертаємо коректний селектор + значення
+
+
+
+
+    
     def expr(self, args):
         """Обробка виразів"""
-        # print(f"DEBUG: args -> {args}")
+        # print("expr DEBUG ->   ", args)
 
         if len(args) == 1:
             base = args[0]
@@ -173,11 +212,11 @@ class SOL25Transformer(Transformer):
         else:
             base, tail = args
 
-        # Якщо `base` — це рядок (ім'я змінної, класу або ключове слово)
+        # Якщо `base` — це ім'я класу (наприклад, `Integer`)
         if isinstance(base, str):  
-            if base[0].isupper():  # Це ім'я класу
+            if base[0].isupper():
                 base = ET.Element("literal", {"class": "class", "value": base})
-            else:  # Це змінна
+            else:
                 base = ET.Element("var", name=base)
 
         if tail:
@@ -188,19 +227,15 @@ class SOL25Transformer(Transformer):
                 selector = tail
                 values = []
 
-            send_elem = ET.Element("send", selector=str(selector))
+            send_elem = ET.Element("send", selector=str(selector))  # Тепер буде `from:a:b:`
             expr_elem = ET.SubElement(send_elem, "expr")
             expr_elem.append(base)  # Додаємо `Integer`
 
             # Додаємо аргументи всередину `send`
             for i, value in enumerate(values, start=1):
                 arg_elem = ET.SubElement(send_elem, "arg", order=str(i))
-                # Якщо value вже <expr>, не вкладаємо ще раз!
-                if value.tag == "expr":
-                    arg_elem.append(value)
-                else:
-                    expr_inner = ET.SubElement(arg_elem, "expr")
-                    expr_inner.append(value)
+                expr_inner = ET.SubElement(arg_elem, "expr")
+                expr_inner.append(value)
 
             # print(f"✅ FIXED expr повертає -> {ET.tostring(send_elem, encoding='unicode')}")
             return send_elem
@@ -208,35 +243,67 @@ class SOL25Transformer(Transformer):
         return base
 
 
+    def process_block(self, block_tree):
+        """Обробка блоку коду або виразу у вигляді блоку"""
+        if not isinstance(block_tree, Tree) or block_tree.data != "block":
+            raise ValueError(f"Очікувався Tree(block), отримано {type(block_tree)}: {block_tree}")
+
+        children = block_tree.children
+
+        # Перевіряємо, чи є `param_list`
+        if len(children) >= 2 and isinstance(children[0], Tree) and children[0].data == "param_list":
+            param_list = children[0]
+            block_body = children[1] if len(children) > 1 and isinstance(children[1], ET.Element) else None
+
+            # Створюємо блок із правильним `arity`
+            param_count = len(param_list.children)
+            block_elem = ET.Element("block", arity=str(param_count))
+
+            # Додаємо параметри
+            for i, param in enumerate(param_list.children, start=1):
+                ET.SubElement(block_elem, "parameter", name=param, order=str(i))
+
+            # Додаємо тіло блоку, тільки якщо це **НЕ ВЖЕ БЛОК**
+            if block_body is not None and block_body.tag != "block":
+                block_elem.append(block_body)
+
+        else:
+            block_elem = ET.Element("block", arity="0")
+
+        return block_elem
+
 
 
 
 
     def assign(self, args):
         """Обробка присвоєння (:=)"""
-        # print(f"DEBUG: assign_def args -> {args}")
         var_name, value = args
         assign_elem = ET.Element("assign")
 
         ET.SubElement(assign_elem, "var", name=var_name)
         expr_elem = ET.SubElement(assign_elem, "expr")
 
-        # Якщо value є деревом, перевіряємо його вміст
-        if isinstance(value, Tree):
-            expr_elem.append(self.transform(value))  # Рекурсивна трансформація
+        # Якщо value - це `Tree`, то перевіряємо, чи це `block`
+        if isinstance(value, Tree) and value.data == "block":
+            block_elem = self.process_block(value)  # Використовуємо ту ж саму логіку, що і в `method_def`
+            expr_elem.append(block_elem)
+        
         elif isinstance(value, ET.Element):
-            expr_elem.append(value)  # Якщо це XML, додаємо його
+            expr_elem.append(value)  # Якщо це вже XML, додаємо його
+
         else:
             expr_elem.text = str(value)  # Якщо це число або рядок, додаємо як текст
 
-        return assign_elem  # ✅ Тепер повертає XML
+        return assign_elem  # ✅ Тепер повертає коректний XML
+
 
 
 
     def expr_base(self, args):
-        """Обробка базових виразів"""
         # print("expr_base DEBUG ->   ", args)
-        
+        # print()
+        # print()
         base = args[0]  # Отримуємо токен
         
         if isinstance(base, Token):  
@@ -245,78 +312,78 @@ class SOL25Transformer(Transformer):
             elif base.type == "STR":
                 return ET.Element("literal", attrib={"class": "String", "value": base.value.strip("'")})
             elif base.type == "ID":
+                if base.value in {"nil", "true", "false"}:
+                 return ET.Element("literal", {"class": base.value.capitalize(), "value": base.value})
                 return ET.Element("var", name=base.value)
             elif base.type == "CID":
                 return ET.Element("literal", attrib={"class": "class", "value": base.value})
         
         return base  # Якщо це вже `ET.Element`, просто повертаємо його
 
-
     def expr_sel(self, args):
-        """Обробка ExprSel (параметричних селекторів)."""
-        # print(f"expr_sel DEBUG ->    {args}")
-
-        if not args:
-            return None  # Якщо немає аргументів, нічого не повертаємо.
+        """Обробка селекторних виразів (object method: value)."""
+        # print("expr_sel DEBUG ->   ", args)
 
         selectors = []
         values = []
 
         for arg in args:
             if isinstance(arg, Token) and arg.type == "ID_COLON":
-                selectors.append(arg.value)  # Додаємо селектор
+                selectors.append(arg)  # `from:`
             elif isinstance(arg, ET.Element):
-                values.append(arg)  # Додаємо значення (наприклад, `1`)
-
-        if not selectors:
-            return values[0] if values else None  
-
-        # ✅ Створюємо `send` з правильним `selector`
-        send_elem = ET.Element("send", selector="".join(selectors))
-        
-        expr_elem = ET.SubElement(send_elem, "expr")
-        expr_elem.append(values[0]) if values else None  # Головний аргумент
-
-        for i, v in enumerate(values[1:], start=1):
-            arg_elem = ET.SubElement(send_elem, "arg", order=str(i))
-            
-            # ✅ Уникаємо подвійного вкладення `<expr>`
-            if v.tag == "expr":
-                arg_elem.append(v)  # Якщо вже `expr`, не обгортаємо ще раз
+                values.append(arg)  # `Integer`, `1`
             else:
-                expr_inner = ET.SubElement(arg_elem, "expr")
-                expr_inner.append(v)
+                print(f"⚠️ ПОМИЛКА: Невідомий аргумент у expr_sel -> {arg}")
 
-        # print(f"✅ expr_sel повертає -> {ET.tostring(send_elem, encoding='unicode')}")
-        return send_elem
+        # if not selectors:
+        #     return None, values  # Якщо селектора немає, повертаємо значення
 
+        return selectors, values
 
 
 
 
     def SIGNED_INT(self, token):
         """Обробка чисел"""
-        return token  # ✅ Повертаємо токен, а не XML
+        #return ET.Element("literal", attrib={"class": "Integer"}, value=str(token))
+        return token
 
     def STR(self, token):
         """Обробка рядків"""
-        return token  # ✅ Повертаємо токен, без генерації `ET.Element`
-
+        #return ET.Element("literal", attrib={"class": "String"}, value=token.strip("'"))
+        return token
     def ID(self, token):
         """Обробка ідентифікаторів"""
-        return token  # ✅ Просто повертаємо як текст
+        # if token in {"nil", "true", "false"}:
+        #     return ET.Element("literal", {"class": token.capitalize(), "value": token})
+        # return ET.Element("var", name=token)
+        return token
+
 
     def CID(self, token):
         """Обробка імен класів"""
-        return token  # ✅ Ніяких `ET.Element`
+        return token
 
     def ID_COLON(self, token):
         """Обробка селекторів методів"""
-        return token  # ✅ Токен селектора залишається токеном
+        return token  
 
     def COLON_ID(self, token):
         """Обробка імен параметрів"""
-        return token[1:]  # ✅ Видаляємо `:`, але залишаємо токен
+        return token[1:]  # Видаляємо двокрапку
+    
+    def EXP_KEYWORD(self, token):
+        """Обробка селекторів методів"""
+        return token
+    def KEYWORD(self, token):
+        """Обробка селекторів методів"""
+        return token
+    def VALID_ID(self, token):
+        """Обробка селекторів методів"""
+        return token
+    def METHOD_COLON(self, token):
+        """Обробка селекторів методів"""
+        return token
 
 
     def transform_to_xml(self):
@@ -468,7 +535,7 @@ def parse_code(code):
         # print("### DEBUG: Parsing starts ###")
         tree = parser.parse(code)
         # print("### PARSING SUCCESS ###")
-        #print(tree.pretty())
+        # print(tree.pretty())
         return tree
     except UnexpectedToken as e:
         print(f"Syntax error at line {e.line}, column {e.column}.")
