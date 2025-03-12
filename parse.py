@@ -43,7 +43,7 @@ TOKEN_TYPES = [
 ]
 
 class SOL25Transformer(Transformer):
-    """Трансформує parse_tree у AST (XML)"""
+    
 
     def __init__(self):
         global input_data
@@ -54,13 +54,13 @@ class SOL25Transformer(Transformer):
             self.root.set("description", comment_text)
 
     def program(self, classes):
-        """Обробляє програму (список класів)"""
+        
         for cls in classes:
             self.root.append(cls)
         return self.root
 
     def class_def(self, args):
-        """Обробка класу"""
+        
         class_name, parent_name, *methods = args
         class_elem = ET.Element("class", name=class_name, parent=parent_name)
         for method in methods:
@@ -68,52 +68,52 @@ class SOL25Transformer(Transformer):
         return class_elem
 
     def method_def(self, args):
-        """Обробка методу SOL25"""
+        
         # print("method_def DEBUG ->   ", args)
         # print()
         # print()
         if not args:
-            raise ValueError("method_def отримав порожні аргументи!")
+            raise ValueError("method_def not arguments!")
 
-        method_tree = args.pop(0)  # Перший елемент - це ім'я методу
+        method_tree = args.pop(0)  
 
-        # Отримуємо ім'я методу або селектор
+        
         if isinstance(method_tree, Tree) and method_tree.data == "method_name":
             selector_tree = method_tree.children[0]
             if isinstance(selector_tree, Tree) and selector_tree.data == "method_selector":
                 method_name = "".join(part for part in selector_tree.children)
             else:
-                method_name = selector_tree.value  # Простий селектор (наприклад, run)
+                method_name = selector_tree.value  
         else:
-            raise ValueError(f"Невідома структура method_name: {method_tree}")
+            raise ValueError(f"Unknown sturcture method_name: {method_tree}")
 
-        # Обробка параметрів (якщо вони є)
+        
         if args and isinstance(args[0], Tree) and args[0].data == "param_list":
-            params = args.pop(0).children  # Отримуємо список параметрів
+            params = args.pop(0).children  
         else:
             params = []
 
-        # Обробка тіла методу (якщо воно є)
+        
         body = args if args else []
 
-        # XML структура
+        
         method_elem = ET.Element("method", selector=method_name)
         block_elem = ET.Element("block", arity=str(len(params)))
 
-        # Додаємо параметри
+        
         for i, param in enumerate(params, start=1):
             ET.SubElement(block_elem, "parameter", name=param, order=str(i))
 
-        # ✅ **Головна зміна тут:**
+        
         for stmt in body:
             if isinstance(stmt, ET.Element) and stmt.tag == "block":
-                # Якщо stmt — це вже блок, додаємо його вміст напряму, не створюючи нового <block>
+                
                 for sub_stmt in list(stmt):
                     block_elem.append(sub_stmt)
             else:
                 block_elem.append(stmt)
 
-        # Додаємо <block> до методу
+        
         method_elem.append(block_elem)
 
         return method_elem
@@ -124,7 +124,7 @@ class SOL25Transformer(Transformer):
 
 
     def blockstat(self, statements):
-        """Обробка списку команд у блоці"""
+        
         # print("blockstat DEBUG ->   ", statements)
         # print()
         # print()
@@ -132,13 +132,13 @@ class SOL25Transformer(Transformer):
 
         for order, stmt in enumerate(statements, start=1):
             if isinstance(stmt, ET.Element) and stmt.tag == "assign":
-                stmt.set("order", str(order))  # ✅ Додаємо порядок виконання
+                stmt.set("order", str(order))  
             elif isinstance(stmt, Tree):  
-                stmt = self.transform(stmt)  # Рекурсивне перетворення
+                stmt = self.transform(stmt) 
                 
             block_elem.append(stmt)
 
-        return block_elem  # ✅ Тепер повертає XML
+        return block_elem 
 
 
 
@@ -147,72 +147,67 @@ class SOL25Transformer(Transformer):
 
     def expr_tail(self, args):
         """Обробка виразів, які мають селектори (наприклад, obj from: 10 a: 5 b: 3)."""
-        # print("expr_tail DEBUG ->   ", args)
-        
-        selectors = []  # Зберігає всі `from:`, `a:`, `b:` і т.д.
-        values = []     # Зберігає всі значення аргументів
+
+        selectors = []
+        values = []
         newArgs = []
-        # print(f"----------------------------- {len(args)}")
-        if len(args) == 0: 
-            return None
-        if len(args) == 1 and isinstance(args[0], tuple):  
-            args = args[0]
-            for arg in args:
-                newArgs.append(arg[0])
-        elif len(args) == 1 and isinstance(args, list) :
-            newArgs = args
-        # else:
-            
-            # print("expr_tail DEBUG ->   ", args)
-            
-            
-            
-        # print(f"------------------------- {newArgs}")
-
-
 
         if not args:
-            return None, []  # Якщо немає аргументів, повертаємо порожній селектор
+            return 
 
+        # Якщо перший елемент - tuple, розгортаємо його
+        while len(args) == 1 and isinstance(args[0], tuple):
+            args = args[0]
 
+        for arg in args:
+            if isinstance(arg, tuple) and len(arg) == 2:
+                # Якщо аргумент є tuple (селектор, значення), додаємо окремо
+                selectors.extend(arg[0])  # Додаємо всі селектори
+                values.extend(arg[1])  # Додаємо всі значення
+            else:
+                newArgs.append(arg)
 
+        # Обробка залишкових аргументів (які не є tuple)
         for arg in newArgs:
-            
             if isinstance(arg, Token) and arg.type == "ID_COLON":
                 selectors.append(arg.value)  # Додаємо `from:`, `a:`, `b:`
-            elif isinstance(arg, Token) and arg.type == "ID":
-                selectors.append(arg.value)
-            elif isinstance(arg, Token) and arg.type == "VALID_ID":
-                selectors.append(arg.value)
             elif isinstance(arg, ET.Element):
                 values.append(arg)  # Додаємо аргументи (наприклад, `1`, `2`, `4`)
+            elif isinstance(arg, str):
+                # Якщо це випадково став просто текстовий рядок, додаємо як селектор
+                selectors.append(arg)
+            elif isinstance(arg, list):
+                # Якщо випадково аргумент є списком, розгортаємо його
+                for sub_arg in arg:
+                    if isinstance(sub_arg, Token) and sub_arg.type == "ID_COLON":
+                        selectors.append(sub_arg.value)
+                    elif isinstance(sub_arg, ET.Element):
+                        values.append(sub_arg)
+                    elif isinstance(sub_arg, str):
+                        selectors.append(sub_arg)
 
-        # 🛠 **Виправлення помилки `IndexError`**
-        if len(selectors) == 0:
-            selector = None  # Якщо немає селекторів, повертаємо None
-        elif len(selectors) == 1:
-            selector = selectors[0]  # Якщо один селектор, повертаємо його як є
-        else:
-            selector = "".join(selectors)  # Якщо кілька селекторів, об'єднуємо їх
+        # Формуємо фінальний селекторний рядок
+        selector = "".join(selectors) if selectors else None
 
-        # print("✅ FIXED expr_tail -> ", selector, values)
-        return selector, values  # ✅ Повертаємо коректний селектор + значення
+        return selector, values  # Повертаємо коректний селектор + значення
+
+
 
 
 
 
     
     def expr(self, args):
-        """Обробка виразів"""
+        
         # print("expr DEBUG ->   ", args)
 
-        if len(args) == 1:
+        if len(args) == 2 and args[1] == None:
             base = args[0]
             tail = None
         else:
             base, tail = args
 
-        # Якщо `base` — це ім'я класу (наприклад, `Integer`)
+        
         if isinstance(base, str):  
             if base[0].isupper():
                 base = ET.Element("literal", {"class": "class", "value": base})
@@ -220,50 +215,50 @@ class SOL25Transformer(Transformer):
                 base = ET.Element("var", name=base)
 
         if tail:
-            # Переконуємось, що `tail` - це tuple, а не Tree
+            
             if isinstance(tail, tuple):  
                 selector, values = tail
             else:
                 selector = tail
                 values = []
 
-            send_elem = ET.Element("send", selector=str(selector))  # Тепер буде `from:a:b:`
+            send_elem = ET.Element("send", selector=str(selector))  
             expr_elem = ET.SubElement(send_elem, "expr")
-            expr_elem.append(base)  # Додаємо `Integer`
+            expr_elem.append(base)  
 
-            # Додаємо аргументи всередину `send`
+            
             for i, value in enumerate(values, start=1):
                 arg_elem = ET.SubElement(send_elem, "arg", order=str(i))
                 expr_inner = ET.SubElement(arg_elem, "expr")
                 expr_inner.append(value)
 
-            # print(f"✅ FIXED expr повертає -> {ET.tostring(send_elem, encoding='unicode')}")
+            
             return send_elem
 
         return base
 
 
     def process_block(self, block_tree):
-        """Обробка блоку коду або виразу у вигляді блоку"""
+        
         if not isinstance(block_tree, Tree) or block_tree.data != "block":
-            raise ValueError(f"Очікувався Tree(block), отримано {type(block_tree)}: {block_tree}")
+            raise ValueError(f"Expect Tree(block), get {type(block_tree)}: {block_tree}")
 
         children = block_tree.children
 
-        # Перевіряємо, чи є `param_list`
+        
         if len(children) >= 2 and isinstance(children[0], Tree) and children[0].data == "param_list":
             param_list = children[0]
             block_body = children[1] if len(children) > 1 and isinstance(children[1], ET.Element) else None
 
-            # Створюємо блок із правильним `arity`
+            
             param_count = len(param_list.children)
             block_elem = ET.Element("block", arity=str(param_count))
 
-            # Додаємо параметри
+            
             for i, param in enumerate(param_list.children, start=1):
                 ET.SubElement(block_elem, "parameter", name=param, order=str(i))
 
-            # Додаємо тіло блоку, тільки якщо це **НЕ ВЖЕ БЛОК**
+            
             if block_body is not None and block_body.tag != "block":
                 block_elem.append(block_body)
 
@@ -277,25 +272,25 @@ class SOL25Transformer(Transformer):
 
 
     def assign(self, args):
-        """Обробка присвоєння (:=)"""
+        
         var_name, value = args
         assign_elem = ET.Element("assign")
 
         ET.SubElement(assign_elem, "var", name=var_name)
         expr_elem = ET.SubElement(assign_elem, "expr")
 
-        # Якщо value - це `Tree`, то перевіряємо, чи це `block`
+        
         if isinstance(value, Tree) and value.data == "block":
-            block_elem = self.process_block(value)  # Використовуємо ту ж саму логіку, що і в `method_def`
+            block_elem = self.process_block(value) 
             expr_elem.append(block_elem)
         
         elif isinstance(value, ET.Element):
-            expr_elem.append(value)  # Якщо це вже XML, додаємо його
+            expr_elem.append(value)  
 
         else:
-            expr_elem.text = str(value)  # Якщо це число або рядок, додаємо як текст
+            expr_elem.text = str(value) 
 
-        return assign_elem  # ✅ Тепер повертає коректний XML
+        return assign_elem  
 
 
 
@@ -304,7 +299,7 @@ class SOL25Transformer(Transformer):
         # print("expr_base DEBUG ->   ", args)
         # print()
         # print()
-        base = args[0]  # Отримуємо токен
+        base = args[0]  
         
         if isinstance(base, Token):  
             if base.type == "SIGNED_INT":
@@ -318,10 +313,11 @@ class SOL25Transformer(Transformer):
             elif base.type == "CID":
                 return ET.Element("literal", attrib={"class": "class", "value": base.value})
         
-        return base  # Якщо це вже `ET.Element`, просто повертаємо його
+        return base  
 
     def expr_sel(self, args):
-        """Обробка селекторних виразів (object method: value)."""
+        """Обробка селекторних виразів (наприклад, obj compute: 3 and: 2 and: 5)."""
+        
         # print("expr_sel DEBUG ->   ", args)
 
         selectors = []
@@ -329,31 +325,34 @@ class SOL25Transformer(Transformer):
 
         for arg in args:
             if isinstance(arg, Token) and arg.type == "ID_COLON":
-                selectors.append(arg)  # `from:`
+                selectors.append(arg.value)  # Додаємо селектор (наприклад, `and:`)
             elif isinstance(arg, ET.Element):
-                values.append(arg)  # `Integer`, `1`
+                values.append(arg)  # Додаємо значення (наприклад, `5`)
+            elif isinstance(arg, tuple) and len(arg) == 2:
+                # Рекурсивний випадок: `arg` вже містить селектори та значення з попереднього рівня
+                prev_selectors, prev_values = arg
+                selectors.extend(prev_selectors)  # Додаємо попередні селектори
+                values.extend(prev_values)  # Додаємо попередні значення
             else:
                 print(f"⚠️ ПОМИЛКА: Невідомий аргумент у expr_sel -> {arg}")
 
-        # if not selectors:
-        #     return None, values  # Якщо селектора немає, повертаємо значення
+        return selectors, values  # Повертаємо всі селектори і всі значення у вигляді двох списків
 
-        return selectors, values
 
 
 
 
     def SIGNED_INT(self, token):
-        """Обробка чисел"""
+        
         #return ET.Element("literal", attrib={"class": "Integer"}, value=str(token))
         return token
 
     def STR(self, token):
-        """Обробка рядків"""
+        
         #return ET.Element("literal", attrib={"class": "String"}, value=token.strip("'"))
         return token
     def ID(self, token):
-        """Обробка ідентифікаторів"""
+        
         # if token in {"nil", "true", "false"}:
         #     return ET.Element("literal", {"class": token.capitalize(), "value": token})
         # return ET.Element("var", name=token)
@@ -361,40 +360,40 @@ class SOL25Transformer(Transformer):
 
 
     def CID(self, token):
-        """Обробка імен класів"""
+        
         return token
 
     def ID_COLON(self, token):
-        """Обробка селекторів методів"""
+        
         return token  
 
     def COLON_ID(self, token):
-        """Обробка імен параметрів"""
-        return token[1:]  # Видаляємо двокрапку
+        
+        return token[1:]  
     
     def EXP_KEYWORD(self, token):
-        """Обробка селекторів методів"""
+        
         return token
     def KEYWORD(self, token):
-        """Обробка селекторів методів"""
+        
         return token
     def VALID_ID(self, token):
-        """Обробка селекторів методів"""
+        
         return token
     def METHOD_COLON(self, token):
-        """Обробка селекторів методів"""
+        
         return token
 
 
     def transform_to_xml(self):
-        """Генерує XML з відступами"""
-        raw_xml = ET.tostring(self.root, encoding="utf-8")  # Генеруємо XML як байти
-        parsed_xml = xml.dom.minidom.parseString(raw_xml)  # Парсимо для форматування
-        formatted_xml = parsed_xml.toprettyxml(indent="  ")  # Форматуємо XML
+        
+        raw_xml = ET.tostring(self.root, encoding="utf-8")  
+        parsed_xml = xml.dom.minidom.parseString(raw_xml) 
+        formatted_xml = parsed_xml.toprettyxml(indent="  ")  
         # print("----------------------------------------------------------------")
         # print(formatted_xml)
         # print("----------------------------------------------------------------")
-        # Not the best way 
+        
         formatted_xml = formatted_xml.replace('<?xml version="1.0" ?>', '<?xml version="1.0" encoding="UTF-8"?>')
 
         return formatted_xml
@@ -406,17 +405,13 @@ checks the lexical, syntactic, and static semantic correctness of the code, and 
 of the abstract syntax tree of the program.""")
 
 def extract_first_comment(code):
-    """Вилучає перший блочний коментар у SOL25."""
+    
     comment_pattern = re.compile(r'"([^"]*)"', re.DOTALL)
     match = comment_pattern.search(code)
     
     return match.group(1) if match else None
 
-# def format_comment(comment):
-#     """Форматує коментар для XML, замінюючи `\n` на `&#10;` та запобігаючи екрануванню `&`."""
-#     if comment:
-#         return comment.replace("\n", "&#10;")  # Замінюємо новий рядок
-#     return None
+
 
 
 def tokenize(code):
@@ -449,11 +444,11 @@ def tokenize(code):
                 break  
 
         if not match:
-            print("\n Error: Invalid token detected!")
-            print(f"   Remaining code: {code[:20]}")  
-            print(f"   Last extracted tokens: {tokens[-5:]}")  
+            # print("\n Error: Invalid token detected!")
+            # print(f"   Remaining code: {code[:20]}")  
+            # print(f"   Last extracted tokens: {tokens[-5:]}")  
             sys.stderr.write(f"Error: Invalid token near '{code[:20]}'\n")
-            print("21 Error")
+            # print("21 Error")
             sys.exit(21)
 
     return tokens
@@ -538,19 +533,19 @@ def parse_code(code):
         # print(tree.pretty())
         return tree
     except UnexpectedToken as e:
-        print(f"Syntax error at line {e.line}, column {e.column}.")
-        print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
-        # If you want to see some code context around the error, use:
+        # print(f"Syntax error at line {e.line}, column {e.column}.")
+        # print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
+        
         context_str = e.get_context(code, span=40)
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
-    # except UnexpectedCharacters:
-    #     sys.stderr.write("Error: Syntax error.\n")
-    #     sys.exit(22)
+    except UnexpectedCharacters:
+        sys.stderr.write("Error: Syntax error.\n")
+        sys.exit(22)
     except UnexpectedInput as e:
-        print(f"Syntax error at line {e.line}, column {e.column}.")
-        print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
-        # If you want to see some code context around the error, use:
+        # print(f"Syntax error at line {e.line}, column {e.column}.")
+        # print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
+        
         context_str = e.get_context(code, span=40)
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
@@ -603,21 +598,17 @@ def main():
         except PermissionError:
             sys.stderr.write(f"Error: No permission to read file '{args.source}'.\n")
             sys.exit(11)
-    # POTIM dorobyty
+    
     else:
         input_data = sys.stdin.read()
         
         
-    # print(input_data)
-    # print("Input data above ---------------------------------------")
+    
     tokens = tokenize(input_data)
-    # print()
-    # print(tokens)
-    # print("Tokens above ---------------------------------------")
-    # print()
+    # print("--------------------------------",type(tokens))
     # for token in tokens:
     #     # print(token)
-    
+    # print("--------------------------------",type(input_data))
     parse_tree = parse_code(input_data)
     transformer = SOL25Transformer()
     xml_tree = transformer.transform(parse_tree)
