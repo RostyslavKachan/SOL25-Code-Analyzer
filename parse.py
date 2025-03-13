@@ -217,6 +217,18 @@ class SOL25Transformer(Transformer):
             else:
                 base = ET.Element("var", name=base)
 
+        elif isinstance(base, Tree):
+            if base.data == "block":
+                base = self.process_block(base)  # Використовуємо process_block для блоків
+            else:
+                transformed_base = self.transform(base)  # Перетворюємо дерево у XML
+                
+                if isinstance(transformed_base, ET.Element):
+                    base = transformed_base  # Тільки якщо це XML, оновлюємо base
+                else:
+                    print(f"⚠️ ПОМИЛКА: Неможливо перетворити base у XML -> {base}")
+                    base = None  # Не додаємо його у XML
+
         if tail:
             # Перевіряємо, чи tail є кортежем (селектор + значення)
             if isinstance(tail, tuple):
@@ -227,7 +239,12 @@ class SOL25Transformer(Transformer):
 
             send_elem = ET.Element("send", selector=str(selector))
             expr_elem = ET.SubElement(send_elem, "expr")
-            expr_elem.append(base)
+
+            # Додаємо base у expr_elem тільки якщо це коректний XML-елемент
+            if isinstance(base, ET.Element):
+                expr_elem.append(base)
+            elif base is not None:
+                print(f"⚠️ ПОМИЛКА: Неможливо додати base у XML -> {base}")
 
             # Обробляємо аргументи
             for i, value in enumerate(values, start=1):
@@ -235,9 +252,10 @@ class SOL25Transformer(Transformer):
                 expr_inner = ET.SubElement(arg_elem, "expr")
 
                 if isinstance(value, Tree):
-                    transformed_value = (
-                        self.process_block(value) if value.data == "block" else self.transform(value)
-                    )
+                    if value.data == "block":  
+                        transformed_value = self.process_block(value)
+                    else:
+                        transformed_value = self.transform(value)
 
                     if isinstance(transformed_value, ET.Element):
                         expr_inner.append(transformed_value)
@@ -248,7 +266,6 @@ class SOL25Transformer(Transformer):
                     expr_inner.append(value)  # Якщо це вже XML, додаємо напряму
 
                 elif isinstance(value, str):
-                    # Обробка випадку, якщо value - рядок
                     literal_elem = ET.Element("literal", {"class": "String", "value": value})
                     expr_inner.append(literal_elem)
 
@@ -257,7 +274,9 @@ class SOL25Transformer(Transformer):
 
             return send_elem
 
-        return base
+        return base  # Якщо немає tail, повертаємо сам base
+
+
 
 
 
