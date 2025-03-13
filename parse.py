@@ -171,6 +171,8 @@ class SOL25Transformer(Transformer):
         for arg in newArgs:
             if isinstance(arg, Token) and arg.type == "ID_COLON":
                 selectors.append(arg.value)  # Додаємо `from:`, `a:`, `b:`
+            elif isinstance(arg, Token) and arg.type == "VALID_ID":
+                selectors.append(arg.value)  # Додаємо `from:`, `a:`, `b:`
             elif isinstance(arg, ET.Element):
                 values.append(arg)  # Додаємо аргументи (наприклад, `1`, `2`, `4`)
             elif isinstance(arg, str):
@@ -183,6 +185,8 @@ class SOL25Transformer(Transformer):
                         selectors.append(sub_arg.value)
                     elif isinstance(sub_arg, ET.Element):
                         values.append(sub_arg)
+                    elif isinstance(sub_arg, Tree):
+                        values.append(self.transform(sub_arg))
                     elif isinstance(sub_arg, str):
                         selectors.append(sub_arg)
 
@@ -198,74 +202,98 @@ class SOL25Transformer(Transformer):
 
     
     def expr(self, args):
-        
         # print("expr DEBUG ->   ", args)
 
-        if len(args) == 2 and args[1] == None:
+        if len(args) == 2 and args[1] is None:
             base = args[0]
             tail = None
         else:
             base, tail = args
 
-        
-        if isinstance(base, str):  
+        # Перетворення base у XML-структуру
+        if isinstance(base, str):
             if base[0].isupper():
                 base = ET.Element("literal", {"class": "class", "value": base})
             else:
                 base = ET.Element("var", name=base)
 
         if tail:
-            
-            if isinstance(tail, tuple):  
+            # Перевіряємо, чи tail є кортежем (селектор + значення)
+            if isinstance(tail, tuple):
                 selector, values = tail
             else:
                 selector = tail
                 values = []
 
-            send_elem = ET.Element("send", selector=str(selector))  
+            send_elem = ET.Element("send", selector=str(selector))
             expr_elem = ET.SubElement(send_elem, "expr")
-            expr_elem.append(base)  
+            expr_elem.append(base)
 
-            
+            # Обробляємо аргументи
             for i, value in enumerate(values, start=1):
                 arg_elem = ET.SubElement(send_elem, "arg", order=str(i))
                 expr_inner = ET.SubElement(arg_elem, "expr")
-                expr_inner.append(value)
 
-            
+                if isinstance(value, Tree):
+                    transformed_value = (
+                        self.process_block(value) if value.data == "block" else self.transform(value)
+                    )
+
+                    if isinstance(transformed_value, ET.Element):
+                        expr_inner.append(transformed_value)
+                    else:
+                        print(f"⚠️ ПОМИЛКА: Неможливо перетворити Tree у XML -> {value}")
+
+                elif isinstance(value, ET.Element):
+                    expr_inner.append(value)  # Якщо це вже XML, додаємо напряму
+
+                elif isinstance(value, str):
+                    # Обробка випадку, якщо value - рядок
+                    literal_elem = ET.Element("literal", {"class": "String", "value": value})
+                    expr_inner.append(literal_elem)
+
+                else:
+                    print(f"⚠️ ПОМИЛКА: Невідомий тип аргументу у expr -> {type(value)}")
+
             return send_elem
 
         return base
 
 
+
     def process_block(self, block_tree):
-        
+        """Обробка блоку коду"""
         if not isinstance(block_tree, Tree) or block_tree.data != "block":
-            raise ValueError(f"Expect Tree(block), get {type(block_tree)}: {block_tree}")
+            raise ValueError(f"Очікував Tree(block), отримав {type(block_tree)}: {block_tree}")
 
         children = block_tree.children
 
-        
+        # Якщо є список параметрів
         if len(children) >= 2 and isinstance(children[0], Tree) and children[0].data == "param_list":
             param_list = children[0]
             block_body = children[1] if len(children) > 1 and isinstance(children[1], ET.Element) else None
 
-            
             param_count = len(param_list.children)
             block_elem = ET.Element("block", arity=str(param_count))
 
-            
             for i, param in enumerate(param_list.children, start=1):
                 ET.SubElement(block_elem, "parameter", name=param, order=str(i))
 
-            
-            if block_body is not None and block_body.tag != "block":
+            # Якщо блок тіла існує, **переконуємось, що не обгортаємо його вдруге**
+            if block_body is not None and block_body.tag == "block":
+                for sub_elem in list(block_body):
+                    block_elem.append(sub_elem)  # Додаємо лише внутрішні елементи
+            elif block_body is not None:
                 block_elem.append(block_body)
 
         else:
             block_elem = ET.Element("block", arity="0")
 
         return block_elem
+
+
+
+
 
 
 
@@ -317,8 +345,6 @@ class SOL25Transformer(Transformer):
 
     def expr_sel(self, args):
         """Обробка селекторних виразів (наприклад, obj compute: 3 and: 2 and: 5)."""
-        
-        # print("expr_sel DEBUG ->   ", args)
 
         selectors = []
         values = []
@@ -333,10 +359,15 @@ class SOL25Transformer(Transformer):
                 prev_selectors, prev_values = arg
                 selectors.extend(prev_selectors)  # Додаємо попередні селектори
                 values.extend(prev_values)  # Додаємо попередні значення
+            elif isinstance(arg, Tree) and arg.data == "block":
+                # Обробка блоку (викликаємо self.transform, щоб отримати XML)
+                block_xml = self.transform(arg)
+                values.append(block_xml)  # Додаємо як значення
             else:
                 print(f"⚠️ ПОМИЛКА: Невідомий аргумент у expr_sel -> {arg}")
 
         return selectors, values  # Повертаємо всі селектори і всі значення у вигляді двох списків
+
 
 
 
@@ -540,8 +571,8 @@ def parse_code(code):
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
     except UnexpectedCharacters:
-        sys.stderr.write("Error: Syntax error.\n")
-        sys.exit(22)
+        sys.stderr.write("Error: Lexical error.\n")
+        sys.exit(21)
     except UnexpectedInput as e:
         # print(f"Syntax error at line {e.line}, column {e.column}.")
         # print(f"Got token: {e.token!r}. Expected one of: {e.expected}")
