@@ -454,12 +454,26 @@ The filter-type script (parse.py in Python 3.11) reads source code in SOL25 from
 checks the lexical, syntactic, and static semantic correctness of the code, and outputs the XML representation 
 of the abstract syntax tree of the program.""")
 
+
 def extract_first_comment(code):
     
-    comment_pattern = re.compile(r'"([^"]*)"', re.DOTALL)
-    match = comment_pattern.search(code)
-    
-    return match.group(1) if match else None
+    in_string = False
+    escape = False
+    comment_start = None
+
+    for i, char in enumerate(code):
+        if char == "'" and not escape: 
+            in_string = not in_string  
+        elif char == '"' and not in_string: 
+            if comment_start is None:
+                comment_start = i + 1  
+            else:
+                return code[comment_start:i]  
+
+        escape = (char == "\\" and not escape)  
+
+    return None  
+
 
 
 
@@ -657,7 +671,7 @@ def main():
     tokens = tokenize(input_data)
     # print("--------------------------------",type(tokens))
     # for token in tokens:
-    #     # print(token)
+    #     print(token)
     # print("--------------------------------",type(input_data))
     parse_tree = parse_code(input_data)
     transformer = SOL25Transformer()
