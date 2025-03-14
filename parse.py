@@ -2,7 +2,7 @@ import sys
 import re
 import argparse
 import xml.etree.ElementTree as ET
-from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken, LexError, Token
+from lark import Lark, Transformer, Tree, UnexpectedInput, UnexpectedCharacters, UnexpectedToken, LexError, Token , Visitor
 import xml.dom.minidom
 
 
@@ -518,7 +518,7 @@ def tokenize(code):
     return tokens
 
 GRAMMAR = r'''
-program: class_def+
+program: class_def*
 
 class_def: "class" CID ":" CID "{" method_def* "}"
 
@@ -531,9 +531,6 @@ param_list: (COLON_ID)*
 
 blockstat: (assign ".")*
 assign: VALID_ID ":=" expr
-
-
-
 
 expr: expr_base expr_tail
 
@@ -583,7 +580,49 @@ STR: /'([^'\\]|\\.)*'/
 %ignore /"[^"]*"/
 '''
 
+class SOL25Semantic(Visitor):
+    def __init__(self):
+        self.found_main = False   
+        self.has_run_method = False  
+        self.class_names = set()  
+        self.current_class = None
 
+    def class_def(self, tree):
+        class_name = tree.children[0].value 
+
+        
+        if class_name in self.class_names:
+            sys.stderr.write(f"Error: Class {class_name} was declared 2 times\n")
+            sys.exit(35)
+        self.class_names.add(class_name)
+        self.current_class = class_name
+
+        
+        if class_name == "Main":
+            self.found_main = True
+            self.current_class = "Main"  
+        
+
+    def method_def(self, tree):
+        if self.current_class == "Main": 
+            method_name_tree = tree.children[0]  
+
+            
+            if isinstance(method_name_tree, Tree) and len(method_name_tree.children) > 0:
+                method_token = method_name_tree.children[0] 
+
+                
+                if isinstance(method_token, Token) and method_token.value == "run":
+                    self.has_run_method = True  
+
+    def check_final(self):
+        if not self.found_main:
+            sys.stderr.write("Error: Class 'Main' is missing!\n")
+            sys.exit(31)
+
+        if not self.has_run_method:
+            sys.stderr.write("Error: Class 'Main' does not have a method 'run'!\n")
+            sys.exit(31)  
 
 
 
@@ -617,7 +656,14 @@ def parse_code(code):
     #     sys.stderr.write("Error: Syntax error.\n")
     #     sys.exit(22)
  
-
+def check_semantics(parse_tree):
+    semantic_check = SOL25Semantic()
+    semantic_check.visit_topdown(parse_tree)
+    semantic_check.check_final()
+    
+    
+    
+    
 input_data = ""
 def main():
     
@@ -674,6 +720,7 @@ def main():
     #     print(token)
     # print("--------------------------------",type(input_data))
     parse_tree = parse_code(input_data)
+    check_semantics(parse_tree)
     transformer = SOL25Transformer()
     xml_tree = transformer.transform(parse_tree)
     xml_output = transformer.transform_to_xml()
