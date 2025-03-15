@@ -586,36 +586,103 @@ class SOL25Semantic(Visitor):
         self.has_run_method = False  
         self.class_names = set()  
         self.current_class = None
+        self.methods = {}  
+        self.variables = set()
+        self.builtin_classes = ["Object", "Nil", "Integer","String", "Block", "True", "False"]  
 
+    
     def class_def(self, tree):
-        class_name = tree.children[0].value 
-
-        
+        class_name = tree.children[0].value  
+        parent_class = tree.children[1].value
+        if class_name == parent_class:
+            sys.stderr.write(f"Error: Class {class_name} cannot inherit itself.\n")
+            sys.exit(32)
         if class_name in self.class_names:
-            sys.stderr.write(f"Error: Class {class_name} was declared 2 times\n")
+            sys.stderr.write(f"Error: Class {class_name} was declared twice.\n")
             sys.exit(35)
         self.class_names.add(class_name)
         self.current_class = class_name
-
         
+        if parent_class not in self.class_names and parent_class not in self.builtin_classes:
+            sys.stderr.write(f"Error: Class {class_name} extends undefined class {parent_class}.\n")
+            sys.exit(32)
+        
+
         if class_name == "Main":
             self.found_main = True
-            self.current_class = "Main"  
-        
 
+    
     def method_def(self, tree):
-        if self.current_class == "Main": 
-            method_name_tree = tree.children[0]  
+        method_name_tree = tree.children[0]  
 
-            
-            if isinstance(method_name_tree, Tree) and len(method_name_tree.children) > 0:
-                method_token = method_name_tree.children[0] 
+        if isinstance(method_name_tree, Token):  
+            method_name = method_name_tree.value  
 
+        elif isinstance(method_name_tree, Tree):  
+            if method_name_tree.data == "method_name":
+                method_name_subtree = method_name_tree.children[0]  
                 
-                if isinstance(method_token, Token) and method_token.value == "run":
-                    self.has_run_method = True  
+                if isinstance(method_name_subtree, Token):  
+                    method_name = method_name_subtree.value  
 
+                elif isinstance(method_name_subtree, Tree) and method_name_subtree.data == "method_selector":
+                    method_name = "".join(child.value for child in method_name_subtree.children if isinstance(child, Token))
+
+                else:
+                    sys.stderr.write("Error: Invalid method name format.\n")
+                    sys.exit(21)
+            else:
+                sys.stderr.write("Error: Unexpected method definition format.\n")
+                sys.exit(22)
+        
+        else:
+            sys.stderr.write("Error: Invalid method definition.\n")
+            sys.exit(22)
+
+        if self.current_class not in self.methods:
+            self.methods[self.current_class] = set()
+
+        if method_name in self.methods[self.current_class]:
+            sys.stderr.write(f"Error: Method {method_name} was declared twice in class {self.current_class}.\n")
+            sys.exit(35)
+        
+        self.methods[self.current_class].add(method_name)
+
+        if self.current_class == "Main" and method_name == "run":
+            self.has_run_method = True  
+
+
+   
+    
+    def expr_base(self, tree):
+        if isinstance(tree.children[0], Token):
+            class_name = tree.children[0].value  
+            if class_name[0].isupper() and class_name not in self.class_names:
+                sys.stderr.write(f"Error: Undefined class {class_name}.\n")
+                sys.exit(32)
+
+   
+    def assign(self, tree):
+        var_name = tree.children[0].value  
+        self.variables.add(var_name)
+
+    def expr_tail(self, tree):
+        if isinstance(tree, Tree):
+            if isinstance(tree.data, Token) and tree.data == "expr_tail":
+                return 
+        if isinstance(tree.children[0], Token):
+            var_name = tree.children[0].value  
+            if var_name not in self.variables:
+                sys.stderr.write(f"Error: Variable {var_name} used before assignment.\n")
+                sys.exit(39)
+        
+        
     def check_final(self):
+        # for arg2 in self.methods:
+        #     print(self.methods[arg2])
+            
+        # print(self.methods)
+        
         if not self.found_main:
             sys.stderr.write("Error: Class 'Main' is missing!\n")
             sys.exit(31)
@@ -721,10 +788,10 @@ def main():
     # print("--------------------------------",type(input_data))
     parse_tree = parse_code(input_data)
     check_semantics(parse_tree)
-    transformer = SOL25Transformer()
-    xml_tree = transformer.transform(parse_tree)
-    xml_output = transformer.transform_to_xml()
-    print(xml_output)
+    # transformer = SOL25Transformer()
+    # xml_tree = transformer.transform(parse_tree)
+    # xml_output = transformer.transform_to_xml()
+    # print(xml_output)
     sys.exit(0)
       
 if __name__ == "__main__":
