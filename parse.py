@@ -8,13 +8,16 @@ import xml.dom.minidom
 
 
 TOKEN_TYPES = [
-    (r"\b[a-z][a-zA-Z0-9]*:\s*", "SELECTOR"),
-    (r"class", "KEY_CLASS"),
-    (r"self", "KEY_SELF"),
-    (r"super", "KEY_SUPER"),
-    (r"nil", "KEY_NIL"),
-    (r"true", "KEY_TRUE"),
-    (r"false", "KEY_FALSE"),
+    # 🔹 Спеціальні ключові слова
+    
+    (r"\bclass\b", "KEY_CLASS"),
+    (r"\bself\b", "KEY_SELF"),
+    (r"\bsuper\b", "KEY_SUPER"),
+    (r"\bnil\b", "KEY_NIL"),
+    (r"\btrue\b", "KEY_TRUE"),
+    (r"\bfalse\b", "KEY_FALSE"),
+
+    # 🔹 Вбудовані класи
     (r"\bObject\b", "OBJECT_CLASS"),
     (r"\bNil\b", "NIL_CLASS"),
     (r"\bTrue\b", "TRUE_CLASS"),
@@ -22,12 +25,34 @@ TOKEN_TYPES = [
     (r"\bInteger\b", "INTEGER_CLASS"),
     (r"\bString\b", "STRING_CLASS"),
     (r"\bBlock\b", "BLOCK_CLASS"),
+
+    # 🔹 Оператори (йдуть перед іншими токенами, щоб уникнути помилок)
+    # 🔹 Параметри (починаються з `:`, наприклад `:x`)
+    (r":[a-z_][a-zA-Z0-9_]*", "PARAMETER"),
+
+    # 🔹 Назви класів (починаються з великої літери)
+    (r"\b[A-Z][a-zA-Z0-9_]*\b", "CLASS_ID"),
     
-    (r":[a-z][_a-zA-Z0-9]*", "PARAMETR"),
-    (r"\b[A-Z][a-zA-Z0-9]*\b", "CLASS_ID"),
-    (r"[_a-z][_a-zA-Z0-9]*", "ID"), 
-    (r"[+-]?\d+", "INTEGER"), 
-    (r"'(?:\\['n\\]|[^'\\\n])*'", "STRING"),
+    
+    (r"\b[a-z_][a-zA-Z0-9_]*\b", "ID"),
+    (r"\b[a-z_][a-zA-Z0-9_]*(:[a-z_][a-zA-Z0-9_]*)*:", "SELECTOR"),
+    # 🔹 Метод-селектори (ідентифікатор із `:` на кінці)
+    
+
+    
+
+    # 🔹 Літерали
+    (r"[+-]?\d+", "INTEGER"),  # Цілі числа
+    (r"'(?:\\['n\\]|[^'\\\n])*'", "STRING"),  # Рядки з підтримкою `\n` та `'`
+    # 🔹 Ідентифікатори (не дозволяють ключові слова)
+    
+
+    
+
+    # 🔹 Дужки та роздільники
+    (r":=", "ASSIGN"),
+    (r":", "COLON"),
+    (r"\.", "DOT"),
     (r"\(", "L_ROUND"), 
     (r"\)", "R_ROUND"),   
     (r"\{", "L_CURLY"),   
@@ -35,11 +60,10 @@ TOKEN_TYPES = [
     (r"\[", "L_BRACKET"), 
     (r"\]", "R_BRACKET"), 
     (r"\|", "PIPE"),  
-    (r":=", "ASSIGN"),  
-    (r":", "COLON"), 
-    (r"\.", "DOT"),  
-    (r"\s+", None),  
-    (r"\".*?\"", None)  
+
+    # 🔹 Пробіли та коментарі (ігноруємо)
+    (r"\s+", None),  # Пробіли (не токенізуються)
+    (r"\".*?\"", None)  # Коментарі
 ]
 
 class SOL25Transformer(Transformer):
@@ -508,9 +532,9 @@ def tokenize(code):
                 break  
 
         if not match:
-            # print("\n Error: Invalid token detected!")
-            # print(f"   Remaining code: {code[:20]}")  
-            # print(f"   Last extracted tokens: {tokens[-5:]}")  
+            print("\n Error: Invalid token detected!")
+            print(f"   Remaining code: {code[:20]}")  
+            print(f"   Last extracted tokens: {tokens[-5:]}")  
             sys.stderr.write(f"Error: Invalid token near '{code[:20]}'\n")
             # print("21 Error")
             sys.exit(21)
@@ -587,54 +611,75 @@ class SOL25Semantic(Visitor):
         self.class_names = set()  
         self.current_class = None
         self.methods = {}  
-        self.variables = set()
-        self.builtin_classes = ["Object", "Nil", "Integer","String", "Block", "True", "False"]  
+        self.builtin_classes = {"Object", "Nil", "Integer", "String", "Block", "True", "False"}
+        # self.initialized_vars = set()  # Локальні змінні, які були визначені
+        self.block_params = set()
+        self.class_variables = set()
+        self.builtin_constants = {"nil", "true", "false"}
+        self.last_CID = None
+        self.class_parents = {}
+        # self.builtin_class_methods = {
+        #     "Object": {"identicalTo:", "equalTo:", "asString", "isNumber", "isString", "isBlock", "isNil"},
+        #     "Nil": {"asString"},
+        #     "Integer": {"equalTo:", "greaterThan:", "plus:", "minus:", "multiplyBy:", "divBy:", "asString", "asInteger", "timesRepeat:"},
+        #     "String": {"read", "print", "equalTo:", "asString", "asInteger", "concatenateWith:", "startsWith:", "endsBefore:"},
+        #     "Block": {"whileTrue"},
+        #     "True": {"not", "and:", "or:", "ifTrue:","ifFalse:"},
+        #     "False": {"not", "and:", "or:", "ifTrue:","ifFalse:"}
+        # }  
 
+    def collect_classes(self, tree):
+        """ Перший прохід: збираємо всі назви класів і записуємо батьківське наслідування. """
+        for class_tree in tree.children:
+            if class_tree.data == "class_def":
+                class_name = class_tree.children[0].value
+                parent_class = class_tree.children[1].value  # Отримуємо батьківський клас
+
+                # Перевіряємо, чи клас уже був оголошений
+                if class_name in self.class_names:
+                    sys.stderr.write(f"Error: Class {class_name} was declared twice.\n")
+                    sys.exit(35)
+
+                self.class_names.add(class_name)  # Додаємо в множину відомих класів
+                self.class_parents[class_name] = parent_class  # Записуємо батьківський клас
     
+
     def class_def(self, tree):
+        """ Другий прохід: перевіряємо успадкування та семантику. """
         class_name = tree.children[0].value  
         parent_class = tree.children[1].value
+        self.class_variables.clear()
+        self.current_class = class_name
+
         if class_name == parent_class:
             sys.stderr.write(f"Error: Class {class_name} cannot inherit itself.\n")
             sys.exit(32)
-        if class_name in self.class_names:
-            sys.stderr.write(f"Error: Class {class_name} was declared twice.\n")
-            sys.exit(35)
-        self.class_names.add(class_name)
-        self.current_class = class_name
-        
+
         if parent_class not in self.class_names and parent_class not in self.builtin_classes:
             sys.stderr.write(f"Error: Class {class_name} extends undefined class {parent_class}.\n")
             sys.exit(32)
-        
 
         if class_name == "Main":
             self.found_main = True
 
-    
     def method_def(self, tree):
         method_name_tree = tree.children[0]  
 
         if isinstance(method_name_tree, Token):  
             method_name = method_name_tree.value  
-
         elif isinstance(method_name_tree, Tree):  
             if method_name_tree.data == "method_name":
                 method_name_subtree = method_name_tree.children[0]  
-                
                 if isinstance(method_name_subtree, Token):  
                     method_name = method_name_subtree.value  
-
                 elif isinstance(method_name_subtree, Tree) and method_name_subtree.data == "method_selector":
                     method_name = "".join(child.value for child in method_name_subtree.children if isinstance(child, Token))
-
                 else:
                     sys.stderr.write("Error: Invalid method name format.\n")
                     sys.exit(21)
             else:
                 sys.stderr.write("Error: Unexpected method definition format.\n")
                 sys.exit(22)
-        
         else:
             sys.stderr.write("Error: Invalid method definition.\n")
             sys.exit(22)
@@ -649,47 +694,179 @@ class SOL25Semantic(Visitor):
         self.methods[self.current_class].add(method_name)
 
         if self.current_class == "Main" and method_name == "run":
-            self.has_run_method = True  
-
-
-   
+            self.has_run_method = True
     
-    def expr_base(self, tree):
-        if isinstance(tree.children[0], Token):
-            class_name = tree.children[0].value  
-            if class_name[0].isupper() and class_name not in self.class_names:
-                sys.stderr.write(f"Error: Undefined class {class_name}.\n")
-                sys.exit(32)
+            # Перевіряємо, чи метод має параметри (чи є `param_list`)
+            if len(tree.children) > 1:
+                param_list = tree.children[1]
+                if isinstance(param_list, Tree) and param_list.data == "param_list" and len(param_list.children) > 0:
+                    sys.stderr.write("Error: Method 'run' in class 'Main' must not have parameters.\n")
+                    sys.exit(31)
 
-   
-    def assign(self, tree):
-        var_name = tree.children[0].value  
-        self.variables.add(var_name)
+    # def block(self, tree):
+    #     """Обробка нового блоку: зберігаємо параметри та ініціалізуємо змінні."""
+    #     self.block_params = {param.children[0].value for param in tree.children if isinstance(param, Tree) and param.data == "param_list"}
+    #     self.initialized_vars = set(self.block_params)  
+    #     self.visit_children(tree)  
+    #     self.block_params.clear()  
+    #     self.initialized_vars.clear()  
+    def param_list(self, tree):
+        """Зберігаємо параметри блоку (локальні змінні) без двокрапки ':'"""
+        for param in tree.children:
+            if isinstance(param, Token):
+                self.block_params.add(param.value.lstrip(':'))  # Видаляємо двокрапку
+
+    # def expr(self, tree):
+    #     """Перевіряє вирази, щоб передати інформацію про ClassId до expr_tail"""
+    #     expr_base_node = tree.children[0]  # expr_base
+    #     expr_tail_node = tree.children[1] if len(tree.children) > 1 else None  # expr_tail (може бути None)
+
+    #     class_name = None
+    #     if isinstance(expr_base_node.children[0], Token) and expr_base_node.children[0].type == "CID":
+    #         class_name = expr_base_node.children[0].value  # Запам'ятовуємо клас
+
+    #     # Обробляємо expr_base (перевіряємо існування класів, змінних)
+    #     self.visit(expr_base_node)
+
+    #     # Передаємо class_name в expr_tail для перевірки `new` чи `from`
+    #     if expr_tail_node:
+    #         self.expr_tail(expr_tail_node, class_name)
+      
+            
+    def expr_base(self, tree):
+        """Обробляє ExprBase: перевіряє ініціалізацію змінних та існування класів."""
+        
+        if isinstance(tree.children[0], Token):
+            token = tree.children[0]
+
+            # Числовий або рядковий літерал – просто пропускаємо
+            if token.type in {"SIGNED_INT", "STR"}:
+                return  
+
+            # Ідентифікатор змінної (id) - перевіряємо, чи змінна була ініціалізована
+            elif token.type == "ID":
+                var_name = token.value
+                if var_name not in self.block_params and var_name not in self.class_variables and var_name not in self.builtin_constants:
+                    sys.stderr.write(f"Error: Variable '{var_name}' used before assignment.\n")
+                    sys.exit(32)
+
+            # Використання класу (Cid) - перевіряємо, чи клас існує
+            elif token.type == "CID":
+                class_name = token.value
+                if class_name not in self.class_names and class_name not in self.builtin_classes:
+                    sys.stderr.write(f"Error: Undefined class '{class_name}'.\n")
+                    sys.exit(32)
+                self.last_CID = class_name
+        elif isinstance(tree.children[0], Tree):
+            node = tree.children[0]
+
+            # Вкладений вираз (ExprBase → (Expr)) - рекурсивний виклик expr
+            if node.data == "expr":
+                self.visit(node)
+
+            # Вираз є блоком (ExprBase → Block) - перевіряємо, чи це допустимий блок
+            elif node.data == "block":
+                self.visit(node)
+
+            else:
+                sys.stderr.write(f"Error: Unexpected expression base '{node.data}'.\n")
+                sys.exit(22)
+
 
     def expr_tail(self, tree):
-        if isinstance(tree, Tree):
-            if isinstance(tree.data, Token) and tree.data == "expr_tail":
-                return 
-        if isinstance(tree.children[0], Token):
-            var_name = tree.children[0].value  
-            if var_name not in self.variables:
-                sys.stderr.write(f"Error: Variable {var_name} used before assignment.\n")
-                sys.exit(39)
-        
-        
-    def check_final(self):
-        # for arg2 in self.methods:
-        #     print(self.methods[arg2])
+        """Перевіряє вирази тільки на використання 'ClassId new' чи 'ClassId from:'."""
+        if not tree.children:
+            return  
+
+        first_child = tree.children[0]  # Отримуємо перший дочірній елемент
+
+        # Якщо перший елемент — це Token, то обробляємо його як селектор
+        if isinstance(first_child, Token):
+            method_name = first_child.value  # Отримуємо селектор
+
+            # Якщо перед цим був ClassId, перевіряємо new чи from:
+            if self.last_CID and method_name == "read":
+                if not self.is_descendant_of_string(self.last_CID):
+                    sys.stderr.write(f"Error: Class '{self.last_CID}' cannot use method '{method_name}'.\n")
+                    sys.exit(32)
+                else:
+                    self.last_CID = None
+                    return
+                
+            if self.last_CID and method_name not in {"new", "from:"}:
+                sys.stderr.write(f"Error: It is not possible to create custom (user) class methods.\n")
+                sys.exit(32)
             
-        # print(self.methods)
+            # Після перевірки скидаємо last_CID
+            self.last_CID = None
+
+        # Якщо перший елемент — це дерево (Tree), то перевіряємо, чи це expr_sel
+        elif isinstance(first_child, Tree):
+            if first_child.data == "expr_sel":
+                return  # Викликаємо обробку expr_sel
+            else:
+                sys.stderr.write(f"Error: Unexpected structure in expr_tail: {first_child.data}\n")
+                sys.exit(22)
+                
+    def is_descendant_of_string(self, class_name):
+        """Перевіряє, чи клас або його предки є нащадками `String`."""
+        while class_name:
+            if class_name == "String":
+                return True  # Один з батьків — String
+            class_name = self.class_parents.get(class_name, None)  # Піднімаємось по ієрархії
+        return False  # Якщо жоден з предків не є String
+
+
+    def expr_sel(self, tree):
+        """Перевіряє, чи аргумент селектора був ініціалізований."""
+        if not tree.children:
+            return  
+
+        selector = tree.children[0].value  # Отримуємо селектор (наприклад, "plus:")
         
+        if self.last_CID and selector not in {"new", "from:"}:
+                sys.stderr.write(f"Error: It is not possible to create custom (user) class methods.\n")
+                sys.exit(32)
+        self.last_CID = None
+        # Перевіряємо аргументи селектора
+        for arg in tree.children[1:]:  # Починаємо з другого елемента, бо перший – це селектор
+            if isinstance(arg, Tree) and arg.data == "expr_base":
+                var_token = arg.children[0]  
+                if isinstance(var_token, Token) and var_token.type == "ID":
+                    var_name = var_token.value
+                    if var_name not in self.class_variables and var_name not in self.block_params and var_name not in self.builtin_constants:
+                        sys.stderr.write(f"Error: Variable '{var_name}' used before assignment.\n")
+                        sys.exit(32)
+  
+
+    def get_all_methods(self):
+        """Повертає всі вбудовані методи, які є допустимими в мові."""
+        all_methods = set()
+        for methods in self.class_methods.values():
+            all_methods.update(methods)
+        return all_methods
+
+    def assign(self, tree):
+        """Записуємо змінну у `class_variables`"""
+        var_name = tree.children[0].value  # Отримуємо ім'я змінної
+        self.class_variables.add(var_name)  # ✅ Додаємо змінну у `set`
+
+
+            
+      
+
+
+    
+
+    def check_final(self):
         if not self.found_main:
             sys.stderr.write("Error: Class 'Main' is missing!\n")
             sys.exit(31)
 
         if not self.has_run_method:
             sys.stderr.write("Error: Class 'Main' does not have a method 'run'!\n")
-            sys.exit(31)  
+            sys.exit(31)
+
 
 
 
@@ -719,12 +896,13 @@ def parse_code(code):
         context_str = e.get_context(code, span=40)
         sys.stderr.write("Error: Syntax error.\n")
         sys.exit(22)
-    # except LexError:
-    #     sys.stderr.write("Error: Syntax error.\n")
-    #     sys.exit(22)
+    except LexError:
+        sys.stderr.write("Error: Syntax error.\n")
+        sys.exit(21)
  
 def check_semantics(parse_tree):
     semantic_check = SOL25Semantic()
+    semantic_check.collect_classes(parse_tree)
     semantic_check.visit_topdown(parse_tree)
     semantic_check.check_final()
     
@@ -788,10 +966,10 @@ def main():
     # print("--------------------------------",type(input_data))
     parse_tree = parse_code(input_data)
     check_semantics(parse_tree)
-    # transformer = SOL25Transformer()
-    # xml_tree = transformer.transform(parse_tree)
-    # xml_output = transformer.transform_to_xml()
-    # print(xml_output)
+    transformer = SOL25Transformer()
+    xml_tree = transformer.transform(parse_tree)
+    xml_output = transformer.transform_to_xml()
+    print(xml_output)
     sys.exit(0)
       
 if __name__ == "__main__":
