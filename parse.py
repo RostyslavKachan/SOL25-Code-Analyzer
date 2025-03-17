@@ -610,17 +610,19 @@ class SOL25Semantic(Visitor):
         self.has_run_method = False  
         self.class_names = set()  
         self.current_class = None
+        self.current_method = None
         self.methods = {}  
         self.builtin_classes = {"Object", "Nil", "Integer", "String", "Block", "True", "False"}
         # self.initialized_vars = set()  # Локальні змінні, які були визначені
         self.block_params = set()
         self.class_variables = set()
-        self.builtin_constants = {"nil", "true", "false","self", "super", "value"}
+        self.builtin_constants = {"nil", "true", "false","self", "super", "value","vysl"}
         self.last_CID = None
         self.class_parents = {}
         self.selectors = []
         self.arg_count = 0
         self.method_params = {}
+        self.method_param_names = {}
         self.builtin_methods_list = [
     "identicalTo:", "equalTo:", "asString", "isNumber", "isString", "isBlock", "isNil",
      "greaterThan:", "plus:", "minus:", "multiplyBy:", "divBy:",  "asInteger", "timesRepeat:",
@@ -673,31 +675,49 @@ class SOL25Semantic(Visitor):
         for class_tree in tree.children:
             if class_tree.data == "class_def":
                 class_name = class_tree.children[0].value  # Отримуємо ім'я класу
-                
+
                 if class_name not in self.methods:
                     self.methods[class_name] = {}
                 if class_name not in self.method_params:
                     self.method_params[class_name] = {}
+                if class_name not in self.method_param_names:
+                    self.method_param_names[class_name] = {}  # Новий словник для імен параметрів
 
                 for method_tree in class_tree.children[2:]:  # Пропускаємо ім'я класу і наслідування
                     if method_tree.data == "method_def":
                         method_name = self.extract_method_name(method_tree.children[0])  # Отримуємо ім'я методу
-                        
+
+                        # **Перевірка дублювання методів у межах класу**
+                        if method_name in self.methods[class_name]:
+                            sys.stderr.write(f"Error: Method '{method_name}' is redefined in class '{class_name}'.\n")
+                            sys.exit(35)  
+
                         # Шукаємо param_list у списку дочірніх елементів
                         param_list = next((child for child in method_tree.children if child.data == "param_list"), None)
-                        param_count = len(param_list.children) if param_list else 0
+                        param_names = [param.value.lstrip(":") for param in param_list.children if isinstance(param, Token)] if param_list else []
+                        param_count = len(param_names)
+
+                        # **Перевірка дублікатів параметрів**
+                        if len(param_names) != len(set(param_names)):
+                            sys.stderr.write(f"Error: Duplicate parameter names in method '{method_name}' of class '{class_name}'.\n")
+                            sys.exit(35) 
 
                         self.methods[class_name][method_name] = param_count
                         self.method_params[class_name][method_name] = param_count
+                        self.method_param_names[class_name][method_name] = param_names  # Зберігаємо назви параметрів
+
+
 
 
 
 
     def class_def(self, tree):
         """ Другий прохід: перевіряємо успадкування та семантику. """
+        print(self.methods)
+        print(self.method_params)
         class_name = tree.children[0].value  
         parent_class = tree.children[1].value
-        self.class_variables.clear()
+        
         self.current_class = class_name
 
         if class_name == parent_class:
@@ -714,8 +734,10 @@ class SOL25Semantic(Visitor):
     def method_def(self, tree):
         """Перевіряє семантику методу: ім'я, параметри, та особливості `run`."""
         method_name = self.extract_method_name(tree.children[0])  # Отримуємо ім'я методу
+        self.current_method = method_name
         param_list = tree.children[1] if len(tree.children) > 1 else None
         param_count = len(param_list.children) if isinstance(param_list, Tree) and param_list.data == "param_list" else 0
+        self.class_variables.clear()
 
         # Переконуємось, що метод існує у self.methods (його зібрав `collect_methods`)
         if method_name not in self.methods[self.current_class]:
@@ -968,9 +990,22 @@ class SOL25Semantic(Visitor):
         return all_methods
 
     def assign(self, tree):
-        """Записуємо змінну у `class_variables`"""
+        """Записуємо змінну у `class_variables` і перевіряємо колізії з параметрами методу."""
+        
         var_name = tree.children[0].value  # Отримуємо ім'я змінної
-        self.class_variables.add(var_name)  # ✅ Додаємо змінну у `set`
+
+        # **Перевірка на колізію з параметрами поточного методу**
+        if self.current_class in self.method_param_names and self.current_method in self.method_param_names[self.current_class]:
+            param_names = [param.lstrip(":") for param in self.method_param_names[self.current_class][self.current_method]]  
+            
+            if var_name in param_names:
+                sys.stderr.write(f"Error: Variable '{var_name}' in method '{self.current_method}' of class '{self.current_class}' conflicts with a method parameter.\n")
+                sys.exit(34)  
+
+        # Якщо немає конфлікту, додаємо змінну у `class_variables`
+        self.class_variables.add(var_name)
+
+
 
 
             
