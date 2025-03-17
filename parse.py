@@ -615,18 +615,20 @@ class SOL25Semantic(Visitor):
         # self.initialized_vars = set()  # Локальні змінні, які були визначені
         self.block_params = set()
         self.class_variables = set()
-        self.builtin_constants = {"nil", "true", "false"}
+        self.builtin_constants = {"nil", "true", "false","self", "super", "value"}
         self.last_CID = None
         self.class_parents = {}
-        # self.builtin_class_methods = {
-        #     "Object": {"identicalTo:", "equalTo:", "asString", "isNumber", "isString", "isBlock", "isNil"},
-        #     "Nil": {"asString"},
-        #     "Integer": {"equalTo:", "greaterThan:", "plus:", "minus:", "multiplyBy:", "divBy:", "asString", "asInteger", "timesRepeat:"},
-        #     "String": {"read", "print", "equalTo:", "asString", "asInteger", "concatenateWith:", "startsWith:", "endsBefore:"},
-        #     "Block": {"whileTrue"},
-        #     "True": {"not", "and:", "or:", "ifTrue:","ifFalse:"},
-        #     "False": {"not", "and:", "or:", "ifTrue:","ifFalse:"}
-        # }  
+        self.selectors = []
+        self.arg_count = 0
+        self.method_params = {}
+        self.builtin_methods_list = [
+    "identicalTo:", "equalTo:", "asString", "isNumber", "isString", "isBlock", "isNil",
+     "greaterThan:", "plus:", "minus:", "multiplyBy:", "divBy:",  "asInteger", "timesRepeat:",
+    "print",  "concatenateWith:", "startsWith:", "endsBefore:",
+    "whileTrue:",
+    "not", "and:", "or:", "ifTrue:", "ifFalse:", "from:","value:","vysl", "vysl:"]
+
+  
 
     def collect_classes(self, tree):
         """ Перший прохід: збираємо всі назви класів і записуємо батьківське наслідування. """
@@ -642,7 +644,54 @@ class SOL25Semantic(Visitor):
 
                 self.class_names.add(class_name)  # Додаємо в множину відомих класів
                 self.class_parents[class_name] = parent_class  # Записуємо батьківський клас
-    
+                
+        visited = set()
+        for class_name in self.class_parents:
+            self.detect_cycle(class_name, visited, set())  # DFS перевірка на цикли
+                
+         
+         
+    def detect_cycle(self, class_name, visited, stack):
+        """ Рекурсивно перевіряє цикли у графі наслідування. """
+        if class_name in stack:  # Виявили цикл
+            sys.stderr.write(f"Error: Cyclic inheritance detected involving class {class_name}.\n")
+            sys.exit(35)
+
+        if class_name not in self.class_parents or class_name in visited:
+            return  # Більше немає батьків або вже перевірили цей клас
+
+        stack.add(class_name)  # Додаємо в стек
+        parent = self.class_parents[class_name]
+
+        self.detect_cycle(parent, visited, stack)  # Рекурсія на батьківський клас
+        stack.remove(class_name)  # Видаляємо зі стеку після рекурсії
+        visited.add(class_name)  # Позначаємо   
+        
+            
+    def collect_methods(self, tree):
+        """Другий прохід: збираємо всі методи для кожного класу, включаючи кількість параметрів."""
+        for class_tree in tree.children:
+            if class_tree.data == "class_def":
+                class_name = class_tree.children[0].value  # Отримуємо ім'я класу
+                
+                if class_name not in self.methods:
+                    self.methods[class_name] = {}
+                if class_name not in self.method_params:
+                    self.method_params[class_name] = {}
+
+                for method_tree in class_tree.children[2:]:  # Пропускаємо ім'я класу і наслідування
+                    if method_tree.data == "method_def":
+                        method_name = self.extract_method_name(method_tree.children[0])  # Отримуємо ім'я методу
+                        
+                        # Шукаємо param_list у списку дочірніх елементів
+                        param_list = next((child for child in method_tree.children if child.data == "param_list"), None)
+                        param_count = len(param_list.children) if param_list else 0
+
+                        self.methods[class_name][method_name] = param_count
+                        self.method_params[class_name][method_name] = param_count
+
+
+
 
     def class_def(self, tree):
         """ Другий прохід: перевіряємо успадкування та семантику. """
@@ -663,45 +712,40 @@ class SOL25Semantic(Visitor):
             self.found_main = True
 
     def method_def(self, tree):
-        method_name_tree = tree.children[0]  
+        """Перевіряє семантику методу: ім'я, параметри, та особливості `run`."""
+        method_name = self.extract_method_name(tree.children[0])  # Отримуємо ім'я методу
+        param_list = tree.children[1] if len(tree.children) > 1 else None
+        param_count = len(param_list.children) if isinstance(param_list, Tree) and param_list.data == "param_list" else 0
 
-        if isinstance(method_name_tree, Token):  
-            method_name = method_name_tree.value  
-        elif isinstance(method_name_tree, Tree):  
-            if method_name_tree.data == "method_name":
-                method_name_subtree = method_name_tree.children[0]  
-                if isinstance(method_name_subtree, Token):  
-                    method_name = method_name_subtree.value  
-                elif isinstance(method_name_subtree, Tree) and method_name_subtree.data == "method_selector":
-                    method_name = "".join(child.value for child in method_name_subtree.children if isinstance(child, Token))
-                else:
-                    sys.stderr.write("Error: Invalid method name format.\n")
-                    sys.exit(21)
-            else:
-                sys.stderr.write("Error: Unexpected method definition format.\n")
-                sys.exit(22)
-        else:
-            sys.stderr.write("Error: Invalid method definition.\n")
-            sys.exit(22)
-
-        if self.current_class not in self.methods:
-            self.methods[self.current_class] = set()
-
-        if method_name in self.methods[self.current_class]:
-            sys.stderr.write(f"Error: Method {method_name} was declared twice in class {self.current_class}.\n")
-            sys.exit(35)
+        # Переконуємось, що метод існує у self.methods (його зібрав `collect_methods`)
+        if method_name not in self.methods[self.current_class]:
+            sys.stderr.write(f"Error: Method '{method_name}' is not defined in class '{self.current_class}'.\n")
+            sys.exit(32)
         
-        self.methods[self.current_class].add(method_name)
-
+        # print(self.methods["Main"])
+        # Перевірка для `run` у `Main`
         if self.current_class == "Main" and method_name == "run":
             self.has_run_method = True
-    
-            # Перевіряємо, чи метод має параметри (чи є `param_list`)
-            if len(tree.children) > 1:
-                param_list = tree.children[1]
-                if isinstance(param_list, Tree) and param_list.data == "param_list" and len(param_list.children) > 0:
-                    sys.stderr.write("Error: Method 'run' in class 'Main' must not have parameters.\n")
-                    sys.exit(31)
+            if param_count > 0:
+                sys.stderr.write("Error: Method 'run' in class 'Main' must not have parameters.\n")
+                sys.exit(33)
+
+
+    def extract_method_name(self, method_name_tree):
+        """Витягує ім'я методу або селектора."""
+        if isinstance(method_name_tree, Token):  
+            return method_name_tree.value  
+        elif isinstance(method_name_tree, Tree) and method_name_tree.data == "method_name":
+            method_name_subtree = method_name_tree.children[0]
+            if isinstance(method_name_subtree, Token):  
+                return method_name_subtree.value  
+            elif isinstance(method_name_subtree, Tree) and method_name_subtree.data == "method_selector":
+                return "".join(child.value for child in method_name_subtree.children if isinstance(child, Token))
+
+        sys.stderr.write("Error: Invalid method name format.\n")
+        sys.exit(21)
+
+
 
     # def block(self, tree):
     #     """Обробка нового блоку: зберігаємо параметри та ініціалізуємо змінні."""
@@ -816,20 +860,9 @@ class SOL25Semantic(Visitor):
             class_name = self.class_parents.get(class_name, None)  # Піднімаємось по ієрархії
         return False  # Якщо жоден з предків не є String
 
-
-    def expr_sel(self, tree):
-        """Перевіряє, чи аргумент селектора був ініціалізований."""
-        if not tree.children:
-            return  
-
-        selector = tree.children[0].value  # Отримуємо селектор (наприклад, "plus:")
-        
-        if self.last_CID and selector not in {"new", "from:"}:
-                sys.stderr.write(f"Error: It is not possible to create custom (user) class methods.\n")
-                sys.exit(32)
-        self.last_CID = None
-        # Перевіряємо аргументи селектора
-        for arg in tree.children[1:]:  # Починаємо з другого елемента, бо перший – це селектор
+    def validate_variable_usage(self, tree):
+        """Перевіряє, чи змінна була ініціалізована перед використанням."""
+        for arg in tree.children:
             if isinstance(arg, Tree) and arg.data == "expr_base":
                 var_token = arg.children[0]  
                 if isinstance(var_token, Token) and var_token.type == "ID":
@@ -837,7 +870,95 @@ class SOL25Semantic(Visitor):
                     if var_name not in self.class_variables and var_name not in self.block_params and var_name not in self.builtin_constants:
                         sys.stderr.write(f"Error: Variable '{var_name}' used before assignment.\n")
                         sys.exit(32)
-  
+            if isinstance(arg, Token):
+                if(arg.type == "SIGNED_INT" or arg.type == "STR"):
+                    return
+                elif arg.type == "ID": 
+                    if arg not in self.class_variables and arg not in self.block_params and arg not in self.builtin_constants:
+                        sys.stderr.write(f"Error: Variable '{arg}' used before assignment.\n")
+                        sys.exit(32)
+                else:
+                    arg not in self.class_names and arg not in self.builtin_classes
+                    sys.stderr.write(f"Error: Class '{arg}' wasnt declared.\n")
+                    sys.exit(32)
+                    
+                        
+    def expr_sel(self, tree):
+        """Перевіряє, чи аргумент селектора був ініціалізований і чи виклик відповідає визначенню методу."""
+        
+        if not tree.children:
+            return  
+
+        # Забороняємо `tridní metody`, що мають більше одного аргументу
+        if self.last_CID and len(tree.children) > 2:
+            sys.stderr.write(f"Error: It is not possible to create custom (user) class methods.\n")
+            sys.exit(32)
+
+        # Додаємо поточний селектор і підраховуємо аргументи
+        for child in tree.children:
+            if isinstance(child, Token) and child.type == "ID_COLON":
+                self.selectors.append(child.value)  # Додаємо селектор
+            elif isinstance(child, Tree) and child.data == "expr_base":
+                # self.validate_variable_usage(child)
+                self.arg_count += 1  # Підраховуємо аргументи
+            elif isinstance(child, Tree) and child.data == "expr_sel":
+                return child
+            # elif isinstance(child, Tree) and child.data == "expr_sel":
+
+        # for child in tree.children:
+        #     if isinstance(child, Tree) and child.data == "expr_sel":
+        #     # **Гарантуємо, що селектори поточного рівня не втрачаються**
+        #         for subchild in child.children:
+        #             if isinstance(subchild, Token) and subchild.type == "ID_COLON":
+        #                 self.selectors.append(subchild.value)
+        #             elif isinstance(subchild, Tree) and subchild.data == "expr_base":
+        #                 self.validate_variable_usage(subchild)
+        #                 self.arg_count += 1  # Підраховуємо аргументи
+        #         self.visit(child)  
+        
+        # Об'єднуємо всі селектори в один рядок (ім'я методу)
+        method_name = "".join(self.selectors)
+
+        # **Перевірка спеціальних `tridní metody`**
+        if self.last_CID:
+            if method_name not in {"new", "from:"}:
+                sys.stderr.write(f"Error: It is not possible to create custom (user) class methods.\n")
+                sys.exit(32)
+            self.last_CID = None  # Скидаємо `ClassId` після перевірки
+        # **Перевірка аргументів селектора**
+        for arg in tree.children[1:]:
+            if isinstance(arg, Tree) and arg.data == "expr_base":
+                token = arg.children[0]  
+                if isinstance(token, Token) and token.type == "ID":
+                    var_name = token.value
+                    if var_name not in self.class_variables and var_name not in self.block_params and var_name not in self.builtin_constants:
+                        sys.stderr.write(f"Error: Variable '{var_name}' used before assignment.\n")
+                        sys.exit(32)
+                elif isinstance(token, Token) and token.type == "CID":
+                    class_name = token.value
+                    if class_name not in self.class_names and class_name not in self.builtin_classes:
+                        sys.stderr.write(f"Error: Class '{class_name}' wasnt declared.\n")
+                        sys.exit(32)
+        
+        # **Перевірка чи метод існує у класі**
+        if (self.current_class not in self.methods or method_name not in self.methods[self.current_class]) and method_name not in  self.builtin_methods_list:
+            sys.stderr.write(f"Error: Method '{method_name}' is not defined in class '{self.current_class}'.\n")
+            sys.exit(32)
+
+        # **Перевірка відповідності кількості параметрів**
+        expected_args = self.method_params.get(self.current_class, {}).get(method_name, 0)
+        if method_name in self.builtin_methods_list:
+            self.arg_count-=1
+        if expected_args != self.arg_count:
+            sys.stderr.write(f"Error: Method '{method_name}' in class '{self.current_class}' expects {expected_args} argument(s), but got {self.arg_count}.\n")
+            sys.exit(33)  # Семантична помилка арності
+
+        
+
+        # **Очищення перед наступним викликом**
+        self.selectors.clear()
+        self.arg_count = 0
+
 
     def get_all_methods(self):
         """Повертає всі вбудовані методи, які є допустимими в мові."""
@@ -859,6 +980,7 @@ class SOL25Semantic(Visitor):
     
 
     def check_final(self):
+        
         if not self.found_main:
             sys.stderr.write("Error: Class 'Main' is missing!\n")
             sys.exit(31)
@@ -903,6 +1025,7 @@ def parse_code(code):
 def check_semantics(parse_tree):
     semantic_check = SOL25Semantic()
     semantic_check.collect_classes(parse_tree)
+    semantic_check.collect_methods(parse_tree)
     semantic_check.visit_topdown(parse_tree)
     semantic_check.check_final()
     
